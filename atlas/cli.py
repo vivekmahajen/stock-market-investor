@@ -15,12 +15,14 @@ import sys
 
 from .analysis import analyze, build_signal
 from .backtest import run_backtest, verdict
-from .data import CSVProvider, SyntheticProvider
+from .data import CSVProvider, StooqProvider, SyntheticProvider
 from .indicators import ema
 from .tools import ToolRegistry
 
 
 def _registry(args) -> ToolRegistry:
+    if getattr(args, "stooq", False):
+        return ToolRegistry(StooqProvider())
     if getattr(args, "csv", None):
         return ToolRegistry(CSVProvider(args.csv))
     return ToolRegistry(SyntheticProvider(seed=args.seed))
@@ -39,17 +41,21 @@ def _ema_cross_signal(fast: int = 20, slow: int = 50):
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="atlas", description="ATLAS compute-layer CLI")
-    p.add_argument("--csv", help="directory of <SYMBOL>_<TF>.csv real-data files")
-    p.add_argument("--seed", type=int, default=42, help="synthetic-feed seed")
+    # Shared data-source flags, added to every subcommand via `parents=` so they
+    # work whether placed before or after the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--csv", help="directory of <SYMBOL>_<TF>.csv real-data files")
+    common.add_argument("--stooq", action="store_true", help="use live Stooq data (free, no key; EOD)")
+    common.add_argument("--seed", type=int, default=42, help="synthetic-feed seed")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pa = sub.add_parser("analyze", help="full workup")
+    pa = sub.add_parser("analyze", parents=[common], help="full workup")
     pa.add_argument("symbol")
     pa.add_argument("--timeframe", default="1d")
     pa.add_argument("--lookback", type=int, default=300)
     pa.add_argument("--benchmark", default=None)
 
-    ps = sub.add_parser("signal", help="risk-defined trade plan")
+    ps = sub.add_parser("signal", parents=[common], help="risk-defined trade plan")
     ps.add_argument("symbol")
     ps.add_argument("--entry", type=float, required=True)
     ps.add_argument("--stop", type=float, required=True)
@@ -58,19 +64,19 @@ def main(argv=None) -> int:
     ps.add_argument("--equity", type=float, default=100_000)
     ps.add_argument("--risk-pct", type=float, default=0.01)
 
-    pb = sub.add_parser("backtest", help="EMA-cross demo backtest")
+    pb = sub.add_parser("backtest", parents=[common], help="EMA-cross demo backtest")
     pb.add_argument("symbol")
     pb.add_argument("--timeframe", default="1d")
     pb.add_argument("--lookback", type=int, default=750)
     pb.add_argument("--fast", type=int, default=20)
     pb.add_argument("--slow", type=int, default=50)
 
-    pc = sub.add_parser("screen", help="screen a universe (transparent criteria)")
+    pc = sub.add_parser("screen", parents=[common], help="screen a universe (transparent criteria)")
     pc.add_argument("symbols", help="comma-separated symbols")
     pc.add_argument("--above-ema50", action="store_true", help="require price > EMA50")
     pc.add_argument("--limit", type=int, default=10)
 
-    pd = sub.add_parser("portfolio", help="optimize weights over a universe")
+    pd = sub.add_parser("portfolio", parents=[common], help="optimize weights over a universe")
     pd.add_argument("symbols", help="comma-separated symbols")
     pd.add_argument("--objective", default="min_variance",
                     choices=["equal_weight", "inverse_vol", "min_variance", "max_sharpe"])
