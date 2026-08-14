@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlas-market-intelligence"
+version = "0.1.0"
+description = "Reference compute layer for the ATLAS market-intelligence agent (Section 3 tools)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "vivekmahajen" }]
+keywords = ["trading", "technical-analysis", "backtesting", "risk-management", "llm-agent"]
+dependencies = []  # the library is pure standard library on purpose
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+atlas = "atlas.cli:main"
+
+[tool.setuptools]
+packages = ["atlas", "atlas.data"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

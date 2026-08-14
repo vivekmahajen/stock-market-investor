@@ -20,6 +20,8 @@ and audit.
 |---|---|
 | [`prompts/atlas-system-prompt.md`](prompts/atlas-system-prompt.md) | The **deployable** system prompt — Sections 1–19 only. Paste into the system/developer role of a function-calling LLM. |
 | [`docs/atlas-spec.md`](docs/atlas-spec.md) | The **full specification** — operator notes, the system prompt, and Appendices A (competitive coverage) & B (candor on edge). The canonical reference. |
+| [`atlas/`](atlas/) | The **reference compute layer** — a pure-Python implementation of the Section 3 tools (indicators, levels, patterns, backtesting, seasonality, risk sizing, ATLAS Score). See [The reference implementation](#the-reference-implementation). |
+| [`tests/`](tests/) | pytest suite covering the compute layer against hand-computed values. |
 | `README.md` | This file: overview, the required tool surface, and how to deploy. |
 
 ## Design principle: tool-grounded, never imagined
@@ -85,6 +87,68 @@ the agent degrades gracefully and states what it cannot do.
 See [Appendix A](docs/atlas-spec.md#appendix-a--competitive-coverage-matrix-operator-reference)
 for how each area maps against TrendSpider, Trade Ideas, Tickeron, Autochartist,
 TradingView, Danelfin, Incite AI, Prospero.ai, and Magnifi.
+
+## The reference implementation
+
+The [`atlas/`](atlas/) package is a working, **dependency-free** (pure standard
+library) implementation of the compute layer the prompt calls — the "real
+indicator / pattern / backtest compute layer" that
+[Appendix B](docs/atlas-spec.md#appendix-b--where-the-real-edge-has-to-come-from-candor)
+names as a genuine requirement. It is deliberately faithful to the spec's
+discipline: it computes only from the data it is given and never fabricates.
+
+| Module | Implements | Spec section |
+|---|---|---|
+| `atlas/indicators.py` | SMA/EMA/WMA, RSI, MACD, ATR, Bollinger, Stochastic, ADX/DMI, OBV, ROC, VWAP, relative volume | 4 |
+| `atlas/levels.py` | Swing pivots, clustered support/resistance, nearest levels | 4 |
+| `atlas/patterns.py` | Candlestick recognition (doji, hammer, engulfing, marubozu, …) with geometric confidence | 5 |
+| `atlas/risk.py` | Position sizing, R-multiple, portfolio heat, capped fractional Kelly | 9 |
+| `atlas/backtest.py` | Next-bar-open, cost-aware backtester + full metric set + blunt verdict | 8 |
+| `atlas/seasonality.py` | Calendar-bucketed return stats **with sample sizes** | 3 |
+| `atlas/scoring.py` | Explainable 0–100 ATLAS Score with attribution | 10 |
+| `atlas/analysis.py` | Regime classification, confluence score, the Section 15 output envelope | 4, 6, 14, 15 |
+| `atlas/data/` | `DataProvider` seam: `CSVProvider` (real data) and a **seeded `SyntheticProvider`** flagged `simulated=True` | 3 |
+| `atlas/tools.py` | The Section 3 function-calling registry over the above | 3 |
+
+Design guarantees that mirror the guardrails:
+
+- **No fabricated data.** Synthetic/demo data is always flagged
+  `data_is_simulated: true` in provenance — it can never be mistaken for a real feed.
+- **No fabricated sub-scores.** With no news/fundamentals feed wired in, the
+  `sentiment` and `fundamental` sub-scores return `null`, not a made-up number.
+- **Sample honesty.** The backtester flags any run under 30 trades as noise and
+  the `verdict()` refuses to call a tiny sample an edge.
+- **Risk before reward.** `size_position` caps risk per trade and returns the
+  worst-case currency loss; `build_signal` rejects setups below the R threshold.
+
+### Quickstart
+
+```bash
+# Optional: install dev tooling (the library itself needs nothing)
+pip install -e ".[dev]"
+
+# Run the tests
+python -m pytest -q
+
+# Full workup on the (simulated) synthetic feed
+python -m atlas.cli analyze AAPL
+
+# A risk-defined trade plan
+python -m atlas.cli signal AAPL --entry 100 --stop 95 --targets 110,120
+
+# An EMA-cross backtest (note the small-sample noise warning)
+python -m atlas.cli backtest AAPL --fast 20 --slow 50
+```
+
+```python
+from atlas import analyze, ToolRegistry, SyntheticProvider
+
+report = analyze("AAPL", registry=ToolRegistry(SyntheticProvider(seed=7)))
+print(report["regime"], report["atlas_score"], report["score_label"])
+```
+
+Point the CLI at real data with `--csv <dir>`, using files named
+`<SYMBOL>_<TIMEFRAME>.csv` with header `ts,open,high,low,close,volume`.
 
 ## How to deploy
 

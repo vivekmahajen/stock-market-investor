@@ -1,0 +1,169 @@
+"""Explainable multi-factor ATLAS Score (Section 10).
+
+The score is a transparent, weighted blend of sub-scores with full attribution.
+Weights are explicit and adjustable. A technical sub-score is computed directly
+from indicators; fundamental/sentiment sub-scores are supplied by their tools
+(the spec forbids inventing them).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+from . import indicators as ind
+from .types import OHLCV
+
+DEFAULT_WEIGHTS = {
+    "technical": 0.35,
+    "fundamental": 0.20,
+    "sentiment": 0.15,
+    "relative_strength": 0.15,
+    "risk": 0.15,
+}
+
+
+@dataclass
+class ScoreResult:
+    score: float
+    subscores: Dict[str, Optional[float]]
+    weights: Dict[str, float]
+    label: str
+    contributors: List[str]
+    horizon: str
+
+    def to_dict(self) -> dict:
+        return {
+            "atlas_score": round(self.score, 1),
+            "subscores": {k: (round(v, 1) if v is not None else None) for k, v in self.subscores.items()},
+            "weights": self.weights,
+            "label": self.label,
+            "top_contributors": self.contributors,
+            "horizon": self.horizon,
+        }
+
+
+def technical_subscore(series: OHLCV) -> Optional[float]:
+    """0-100 technical sub-score from trend, momentum, and structure agreement.
+
+    Deterministic and bounded. Returns ``None`` if the series is too short to
+    compute the underlying indicators.
+    """
+    if len(series) < 60:
+        return None
+    close = list(series.close)
+    ema20 = ind.ema(close, 20)
+    ema50 = ind.ema(close, 50)
+    rsi14 = ind.rsi(close, 14)
+    macd = ind.macd(close)
+    adx = ind.adx(series)
+
+    last = len(series) - 1
+    points = 0.0
+    total = 0.0
+
+    # Trend: price above/below EMAs, EMA stack.
+    total += 1
+    if ema20[last] is not None and ema50[last] is not None:
+        if close[last] > ema20[last] > ema50[last]:
+            points += 1
+        elif close[last] > ema20[last]:
+            points += 0.6
+        elif close[last] < ema20[last] < ema50[last]:
+            points += 0.0
+        else:
+            points += 0.4
+
+    # Momentum: RSI regime (favour 45-70, penalise overbought/oversold extremes).
+    total += 1
+    r = rsi14[last]
+    if r is not None:
+        if 50 <= r <= 65:
+            points += 1
+        elif 45 <= r < 50 or 65 < r <= 72:
+            points += 0.6
+        elif r > 80 or r < 25:
+            points += 0.1
+        else:
+            points += 0.4
+
+    # MACD histogram sign.
+    total += 1
+    hist = macd["hist"][last]
+    if hist is not None:
+        points += 1 if hist > 0 else 0.2
+
+    # Trend strength via ADX.
+    total += 1
+    a = adx["adx"][last]
+    if a is not None:
+        if a >= 25:
+            points += 1
+        elif a >= 20:
+            points += 0.6
+        else:
+            points += 0.3
+
+    return (points / total) * 100.0 if total else None
+
+
+def relative_strength_subscore(series: OHLCV, benchmark: OHLCV, lookback: int = 63) -> Optional[float]:
+    """Relative strength vs a benchmark over ``lookback`` bars, mapped to 0-100."""
+    if len(series) <= lookback or len(benchmark) <= lookback:
+        return None
+    sym_ret = series.close[-1] / series.close[-1 - lookback] - 1.0
+    bench_ret = benchmark.close[-1] / benchmark.close[-1 - lookback] - 1.0
+    diff = sym_ret - bench_ret
+    # Map a +/-20% relative move onto 0-100, clamped.
+    return max(0.0, min(100.0, 50.0 + diff * 250.0))
+
+
+def atlas_score(
+    subscores: Dict[str, Optional[float]],
+    weights: Optional[Dict[str, float]] = None,
+    horizon: str = "next 4-8 weeks",
+) -> ScoreResult:
+    """Blend available sub-scores with re-normalised weights and attribute them.
+
+    Missing (``None``) sub-scores are dropped and the remaining weights are
+    renormalised, so the score is always on a 0-100 scale over what was measured.
+    """
+    weights = dict(weights or DEFAULT_WEIGHTS)
+    present = {k: v for k, v in subscores.items() if v is not None and k in weights}
+    if not present:
+        raise ValueError("No sub-scores available to compute an ATLAS Score.")
+
+    wsum = sum(weights[k] for k in present)
+    norm = {k: weights[k] / wsum for k in present}
+    score = sum(present[k] * norm[k] for k in present)
+
+    # Attribution: rank contributions relative to a neutral 50 baseline.
+    contribs = sorted(
+        ((k, (present[k] - 50.0) * norm[k]) for k in present),
+        key=lambda kv: abs(kv[1]),
+        reverse=True,
+    )
+    contributors = [
+        f"{'+' if v >= 0 else '-'} {k.replace('_', ' ')} ({present[k]:.0f})"
+        for k, v in contribs[:4]
+    ]
+
+    return ScoreResult(
+        score=score,
+        subscores=subscores,
+        weights={k: round(w, 3) for k, w in weights.items()},
+        label=_label(score),
+        contributors=contributors,
+        horizon=horizon,
+    )
+
+
+def _label(score: float) -> str:
+    if score >= 75:
+        return "buy"
+    if score >= 60:
+        return "accumulate"
+    if score >= 45:
+        return "hold"
+    if score >= 30:
+        return "reduce"
+    return "avoid"
