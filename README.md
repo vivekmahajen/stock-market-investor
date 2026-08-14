@@ -116,4 +116,4 @@ discipline* — never a promise that any prompt beats the market. See
 
 ## License
 
-No license file is included yet. Add one before distributing.
+Released under the [MIT License](LICENSE).
