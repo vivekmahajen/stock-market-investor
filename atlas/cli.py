@@ -15,12 +15,14 @@ import sys
 
 from .analysis import analyze, build_signal
 from .backtest import run_backtest, verdict
-from .data import CSVProvider, StooqProvider, SyntheticProvider
+from .data import AlphaVantageProvider, CSVProvider, StooqProvider, SyntheticProvider
 from .indicators import ema
 from .tools import ToolRegistry
 
 
 def _registry(args) -> ToolRegistry:
+    if getattr(args, "alpha_vantage", False):
+        return ToolRegistry(AlphaVantageProvider(api_key=getattr(args, "api_key", None)))
     if getattr(args, "stooq", False):
         return ToolRegistry(StooqProvider())
     if getattr(args, "csv", None):
@@ -46,6 +48,10 @@ def main(argv=None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--csv", help="directory of <SYMBOL>_<TF>.csv real-data files")
     common.add_argument("--stooq", action="store_true", help="use live Stooq data (free, no key; EOD)")
+    common.add_argument("--alpha-vantage", action="store_true",
+                        help="use Alpha Vantage (needs a free API key)")
+    common.add_argument("--api-key", default=None,
+                        help="Alpha Vantage API key (else ALPHAVANTAGE_API_KEY env var)")
     common.add_argument("--seed", type=int, default=42, help="synthetic-feed seed")
     sub = p.add_subparsers(dest="cmd", required=True)
 

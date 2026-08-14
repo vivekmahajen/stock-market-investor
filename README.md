@@ -114,7 +114,7 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
 | `atlas/calibration.py` | Signal-confidence vs. realized-outcome tracker: reliability buckets, Brier score, ECE | Appendix B |
 | `atlas/analysis.py` | Regime classification, confluence score, the Section 15 output envelope | 4, 6, 14, 15 |
-| `atlas/data/` | `DataProvider` seam: `StooqProvider` (real, free, no-key EOD), `CSVProvider` (your files), and a seeded `SyntheticProvider` flagged `simulated=True` | 3 |
+| `atlas/data/` | `DataProvider` seam: `AlphaVantageProvider` (real, free key), `StooqProvider`, `CSVProvider` (your files), and a seeded `SyntheticProvider` flagged `simulated=True` | 3 |
 | `atlas/tools.py` | The Section 3 function-calling registry over the above | 3 |
 
 Design guarantees that mirror the guardrails:
@@ -155,12 +155,13 @@ python -m atlas.cli portfolio AAPL,MSFT,NVDA --objective min_variance --benchmar
 
 ### Real market data
 
-Three data sources plug into the same `DataProvider` seam:
+Data sources plug into the same `DataProvider` seam:
 
 ```bash
-# 1. Live data from Stooq — free, no API key (end-of-day history)
-python -m atlas.cli analyze AAPL --stooq
-python -m atlas.cli backtest SPY --stooq
+# 1. Alpha Vantage — real data with a free API key (recommended for live use)
+set ALPHAVANTAGE_API_KEY=YOURKEY        # Windows (cmd);  export on macOS/Linux
+python -m atlas.cli analyze AAPL --alpha-vantage
+python -m atlas.cli analyze AAPL --alpha-vantage --api-key YOURKEY   # or pass inline
 
 # 2. Your own CSV files named <SYMBOL>_<TIMEFRAME>.csv (ts,open,high,low,close,volume)
 python -m atlas.cli analyze AAPL --csv ./mydata
@@ -170,20 +171,27 @@ python -m atlas.cli analyze AAPL
 ```
 
 ```python
-from atlas import ToolRegistry, StooqProvider
+from atlas import ToolRegistry, AlphaVantageProvider
 from atlas.analysis import analyze
 
-report = analyze("AAPL", registry=ToolRegistry(StooqProvider()))   # real EOD data
+report = analyze("AAPL", registry=ToolRegistry(AlphaVantageProvider(api_key="YOURKEY")))
 ```
 
-**`StooqProvider` notes.** US tickers get a `.us` suffix automatically
-(`AAPL` → `aapl.us`); indices (`^spx`) and already-suffixed symbols pass
-through. It serves **end-of-day** data only, so quotes carry an honest
-`staleness_seconds`; intraday timeframes are rejected rather than faked, and
-rate-limit / not-found responses raise clear errors instead of guessing. Network
-I/O sits behind an injectable `fetch` seam, so the parsing is unit-tested
-offline. If your environment restricts outbound HTTPS (egress policy, firewall),
-`--stooq` surfaces the blocked-host error cleanly — fall back to `--csv`.
+**Alpha Vantage.** Get a free key (instant, no card) at
+<https://www.alphavantage.co/support/#api-key>. Supports daily / weekly / monthly
+and intraday (`1m`–`1h`). The free tier is limited (~25 requests/day), so it
+suits single-symbol lookups more than wide screens or multi-symbol portfolios.
+Alpha Vantage returns JSON on errors/rate-limits even in CSV mode — the provider
+detects those and raises a clear message instead of mis-parsing.
+
+**Stooq (`--stooq`).** Was free and no-key, but Stooq has since put a JavaScript
+bot-verification wall in front of its CSV endpoint, so a plain HTTP client can no
+longer fetch it; `StooqProvider` detects that page and says so. Still usable if
+you download CSVs through a browser and feed them via `--csv`.
+
+**Blocked networks.** If your environment restricts outbound HTTPS (egress
+policy, firewall), the live providers surface the blocked-host error cleanly —
+fall back to `--csv`.
 
 ```python
 from atlas import analyze, ToolRegistry, SyntheticProvider
