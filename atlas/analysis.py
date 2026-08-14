@@ -11,6 +11,9 @@ from typing import Dict, List, Optional
 
 from . import indicators as ind
 from . import scoring
+from .chart_patterns import detect_classical
+from .fibonacci import auto_fibonacci
+from .harmonics import detect_harmonics
 from .levels import nearest_levels
 from .patterns import latest_patterns
 from .risk import r_multiple, size_position
@@ -105,7 +108,12 @@ def analyze(
 
     levels = registry.detect_levels(series)
     near = nearest_levels(series)
-    patterns = latest_patterns(series, lookback=5)
+    patterns = {
+        "candlestick": latest_patterns(series, lookback=5),
+        "classical": detect_classical(series),
+        "harmonic": detect_harmonics(series),
+    }
+    fib = auto_fibonacci(series)
 
     prov = [fetched["provenance"]]
     simulated = fetched["provenance"].get("simulated", False)
@@ -128,6 +136,7 @@ def analyze(
             "nearest_resistance": near["resistance_above"],
             "last_close": levels["last_close"],
         },
+        "fibonacci": fib,
         "patterns": patterns,
         "events": [],  # no calendar feed in this build; must be checked before a live signal
         "data_provenance": prov,

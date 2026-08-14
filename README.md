@@ -102,6 +102,9 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/indicators.py` | SMA/EMA/WMA, RSI, MACD, ATR, Bollinger, Stochastic, ADX/DMI, OBV, ROC, VWAP, relative volume | 4 |
 | `atlas/levels.py` | Swing pivots, clustered support/resistance, nearest levels | 4 |
 | `atlas/patterns.py` | Candlestick recognition (doji, hammer, engulfing, marubozu, …) with geometric confidence | 5 |
+| `atlas/chart_patterns.py` | Classical patterns: double top/bottom, head-and-shoulders (+ inverse), triangles — with measured target, invalidation, completion | 5 |
+| `atlas/harmonics.py` | Harmonic patterns (Gartley, Bat, Butterfly, Crab, Shark) via Fibonacci leg ratios, with PRZ, targets, invalidation | 5 |
+| `atlas/fibonacci.py` | Auto-anchored Fibonacci retracements & extensions | 5 |
 | `atlas/risk.py` | Position sizing, R-multiple, portfolio heat, capped fractional Kelly | 9 |
 | `atlas/backtest.py` | Next-bar-open, cost-aware backtester + full metric set + blunt verdict | 8 |
 | `atlas/seasonality.py` | Calendar-bucketed return stats **with sample sizes** | 3 |

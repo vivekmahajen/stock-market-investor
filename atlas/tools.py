@@ -15,7 +15,10 @@ from . import patterns as pat
 from . import seasonality as seas
 from .alerts import AlertStore
 from .backtest import run_backtest, verdict
+from .chart_patterns import detect_classical
 from .data import DataProvider, SyntheticProvider
+from .fibonacci import auto_fibonacci
+from .harmonics import detect_harmonics
 from .portfolio import optimize_portfolio
 from .screen import run_screen
 from .types import OHLCV, Provenance
@@ -97,8 +100,23 @@ class ToolRegistry:
     def detect_levels(self, series: OHLCV) -> dict:
         return lvl.detect_levels(series)
 
-    def detect_patterns(self, series: OHLCV, families: Optional[List[str]] = None) -> List[dict]:
-        return pat.latest_patterns(series)
+    def detect_patterns(self, series: OHLCV, families: Optional[List[str]] = None) -> dict:
+        """Detect patterns across requested families (Section 5).
+
+        Families: ``candlestick``, ``classical``, ``harmonic``. Defaults to all.
+        """
+        families = families or ["candlestick", "classical", "harmonic"]
+        out: Dict[str, object] = {}
+        if "candlestick" in families:
+            out["candlestick"] = pat.latest_patterns(series, lookback=5)
+        if "classical" in families:
+            out["classical"] = detect_classical(series)
+        if "harmonic" in families:
+            out["harmonic"] = detect_harmonics(series)
+        return out
+
+    def fibonacci(self, series: OHLCV) -> Optional[dict]:
+        return auto_fibonacci(series)
 
     def compute_seasonality(self, series: OHLCV, granularity: str = "month") -> dict:
         return seas.compute_seasonality(series, granularity)
