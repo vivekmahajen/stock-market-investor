@@ -28,7 +28,7 @@ from .analysis import analyze, build_signal, classify_regime, confluence_score
 from .backtest import run_backtest, verdict
 from .calibration import CalibrationLog, SignalRecord
 from .chart_patterns import detect_classical
-from .data import CSVProvider, DataProvider, SyntheticProvider
+from .data import CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
 from .portfolio import optimize_portfolio
@@ -69,6 +69,7 @@ __all__ = [
     "DataProvider",
     "SyntheticProvider",
     "CSVProvider",
+    "StooqProvider",
     "OHLCV",
     "Bar",
     "Quote",

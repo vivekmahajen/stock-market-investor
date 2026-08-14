@@ -114,7 +114,7 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
 | `atlas/calibration.py` | Signal-confidence vs. realized-outcome tracker: reliability buckets, Brier score, ECE | Appendix B |
 | `atlas/analysis.py` | Regime classification, confluence score, the Section 15 output envelope | 4, 6, 14, 15 |
-| `atlas/data/` | `DataProvider` seam: `CSVProvider` (real data) and a **seeded `SyntheticProvider`** flagged `simulated=True` | 3 |
+| `atlas/data/` | `DataProvider` seam: `StooqProvider` (real, free, no-key EOD), `CSVProvider` (your files), and a seeded `SyntheticProvider` flagged `simulated=True` | 3 |
 | `atlas/tools.py` | The Section 3 function-calling registry over the above | 3 |
 
 Design guarantees that mirror the guardrails:
@@ -152,6 +152,38 @@ python -m atlas.cli screen AAPL,MSFT,NVDA,AMD --above-ema50 --limit 5
 # Optimize a portfolio (min-variance) vs a benchmark
 python -m atlas.cli portfolio AAPL,MSFT,NVDA --objective min_variance --benchmark SPY
 ```
+
+### Real market data
+
+Three data sources plug into the same `DataProvider` seam:
+
+```bash
+# 1. Live data from Stooq — free, no API key (end-of-day history)
+python -m atlas.cli analyze AAPL --stooq
+python -m atlas.cli backtest SPY --stooq
+
+# 2. Your own CSV files named <SYMBOL>_<TIMEFRAME>.csv (ts,open,high,low,close,volume)
+python -m atlas.cli analyze AAPL --csv ./mydata
+
+# 3. Synthetic (default) — deterministic, seeded, always flagged simulated
+python -m atlas.cli analyze AAPL
+```
+
+```python
+from atlas import ToolRegistry, StooqProvider
+from atlas.analysis import analyze
+
+report = analyze("AAPL", registry=ToolRegistry(StooqProvider()))   # real EOD data
+```
+
+**`StooqProvider` notes.** US tickers get a `.us` suffix automatically
+(`AAPL` → `aapl.us`); indices (`^spx`) and already-suffixed symbols pass
+through. It serves **end-of-day** data only, so quotes carry an honest
+`staleness_seconds`; intraday timeframes are rejected rather than faked, and
+rate-limit / not-found responses raise clear errors instead of guessing. Network
+I/O sits behind an injectable `fetch` seam, so the parsing is unit-tested
+offline. If your environment restricts outbound HTTPS (egress policy, firewall),
+`--stooq` surfaces the blocked-host error cleanly — fall back to `--csv`.
 
 ```python
 from atlas import analyze, ToolRegistry, SyntheticProvider
