@@ -65,6 +65,18 @@ def main(argv=None) -> int:
     pb.add_argument("--fast", type=int, default=20)
     pb.add_argument("--slow", type=int, default=50)
 
+    pc = sub.add_parser("screen", help="screen a universe (transparent criteria)")
+    pc.add_argument("symbols", help="comma-separated symbols")
+    pc.add_argument("--above-ema50", action="store_true", help="require price > EMA50")
+    pc.add_argument("--limit", type=int, default=10)
+
+    pd = sub.add_parser("portfolio", help="optimize weights over a universe")
+    pd.add_argument("symbols", help="comma-separated symbols")
+    pd.add_argument("--objective", default="min_variance",
+                    choices=["equal_weight", "inverse_vol", "min_variance", "max_sharpe"])
+    pd.add_argument("--max-weight", type=float, default=None)
+    pd.add_argument("--benchmark", default=None)
+
     args = p.parse_args(argv)
     reg = _registry(args)
 
@@ -85,6 +97,14 @@ def main(argv=None) -> int:
         out = res.to_dict()
         out["verdict"] = verdict(res.metrics, len(res.trades))
         out["data_is_simulated"] = fetched["provenance"].get("simulated", False)
+    elif args.cmd == "screen":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        filters = [{"field": "above_ema50", "op": "==", "value": True}] if args.above_ema50 else None
+        out = reg.run_screen(symbols, filters=filters, limit=args.limit)
+    elif args.cmd == "portfolio":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        out = reg.optimize_portfolio(symbols, objective=args.objective,
+                                     max_weight=args.max_weight, benchmark=args.benchmark)
     else:  # pragma: no cover
         p.error("unknown command")
         return 2

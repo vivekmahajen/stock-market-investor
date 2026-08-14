@@ -106,6 +106,10 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/backtest.py` | Next-bar-open, cost-aware backtester + full metric set + blunt verdict | 8 |
 | `atlas/seasonality.py` | Calendar-bucketed return stats **with sample sizes** | 3 |
 | `atlas/scoring.py` | Explainable 0–100 ATLAS Score with attribution | 10 |
+| `atlas/screen.py` | Transparent, filterable, composite-ranked screener with liquidity flags | 7 |
+| `atlas/portfolio.py` | Pure-Python optimizer (equal-weight / inverse-vol / min-variance / max-Sharpe), correlation, beta, stress test | 11 |
+| `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
+| `atlas/calibration.py` | Signal-confidence vs. realized-outcome tracker: reliability buckets, Brier score, ECE | Appendix B |
 | `atlas/analysis.py` | Regime classification, confluence score, the Section 15 output envelope | 4, 6, 14, 15 |
 | `atlas/data/` | `DataProvider` seam: `CSVProvider` (real data) and a **seeded `SyntheticProvider`** flagged `simulated=True` | 3 |
 | `atlas/tools.py` | The Section 3 function-calling registry over the above | 3 |
@@ -138,6 +142,12 @@ python -m atlas.cli signal AAPL --entry 100 --stop 95 --targets 110,120
 
 # An EMA-cross backtest (note the small-sample noise warning)
 python -m atlas.cli backtest AAPL --fast 20 --slow 50
+
+# Screen a universe with transparent criteria
+python -m atlas.cli screen AAPL,MSFT,NVDA,AMD --above-ema50 --limit 5
+
+# Optimize a portfolio (min-variance) vs a benchmark
+python -m atlas.cli portfolio AAPL,MSFT,NVDA --objective min_variance --benchmark SPY
 ```
 
 ```python
@@ -145,6 +155,19 @@ from atlas import analyze, ToolRegistry, SyntheticProvider
 
 report = analyze("AAPL", registry=ToolRegistry(SyntheticProvider(seed=7)))
 print(report["regime"], report["atlas_score"], report["score_label"])
+```
+
+Calibration tracking — the Appendix B differentiator — logs each signal's stated
+confidence and, once resolved, measures whether those probabilities are honest:
+
+```python
+from atlas import CalibrationLog
+
+log = CalibrationLog("calibration.json")            # persists to disk
+log.log_signal("AAPL", "long", confidence=72, created="2026-08-14", signal_id="a1")
+# ...later, once the trade resolves...
+log.resolve("a1", "win", realized_r=2.1)
+print(log.metrics())   # reliability buckets, Brier score, expected calibration error
 ```
 
 Point the CLI at real data with `--csv <dir>`, using files named

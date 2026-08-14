@@ -13,16 +13,20 @@ from . import indicators as ind
 from . import levels as lvl
 from . import patterns as pat
 from . import seasonality as seas
+from .alerts import AlertStore
 from .backtest import run_backtest, verdict
 from .data import DataProvider, SyntheticProvider
+from .portfolio import optimize_portfolio
+from .screen import run_screen
 from .types import OHLCV, Provenance
 
 
 class ToolRegistry:
     """Holds a data provider and exposes the Section 3 tools as methods."""
 
-    def __init__(self, provider: Optional[DataProvider] = None):
+    def __init__(self, provider: Optional[DataProvider] = None, alert_store: Optional[AlertStore] = None):
         self.provider = provider or SyntheticProvider()
+        self.alerts = alert_store or AlertStore()
 
     # --- market data -----------------------------------------------------
     def get_ohlcv(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> dict:
@@ -104,6 +108,43 @@ class ToolRegistry:
         d = res.to_dict()
         d["verdict"] = verdict(res.metrics, len(res.trades))
         return d
+
+    def run_screen(self, symbols: List[str], filters=None, **kwargs) -> dict:
+        return run_screen(symbols, filters=filters, provider=self.provider, **kwargs)
+
+    def optimize_portfolio(self, symbols: List[str], objective: str = "min_variance",
+                           timeframe: str = "1d", lookback: int = 300, benchmark: Optional[str] = None,
+                           **kwargs) -> dict:
+        series_by_symbol = {}
+        for s in symbols:
+            f = self.get_ohlcv(s, timeframe, lookback)
+            if "_series" in f:
+                series_by_symbol[s] = f["_series"]
+        if len(series_by_symbol) < 2:
+            return {"error": "Need at least two symbols with sufficient history."}
+        bench_series = None
+        if benchmark:
+            bf = self.get_ohlcv(benchmark, timeframe, lookback)
+            bench_series = bf.get("_series")
+        res = optimize_portfolio(series_by_symbol, objective=objective, benchmark=bench_series, **kwargs)
+        out = res.to_dict()
+        out["simulated"] = getattr(self.provider, "simulated", False)
+        return out
+
+    def create_alert(self, symbol: str, condition: dict, channel: str = "log", note: str = "") -> dict:
+        try:
+            alert = self.alerts.create_alert(symbol, condition, channel, note)
+        except ValueError as e:
+            return {"error": str(e)}
+        return alert.to_dict()
+
+    def check_alerts(self) -> List[dict]:
+        out = []
+        for alert in self.alerts.list_alerts(active_only=True):
+            f = self.get_ohlcv(alert.symbol, "1d", 250)
+            if "_series" in f:
+                out.append(self.alerts.evaluate(alert, f["_series"]))
+        return out
 
 
 def _last(seq):
