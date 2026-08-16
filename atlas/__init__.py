@@ -27,6 +27,7 @@ from .alerts import Alert, AlertStore
 from .analysis import analyze, build_signal, classify_regime, confluence_score
 from .backtest import run_backtest, verdict
 from .calibration import CalibrationLog, SignalRecord
+from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
@@ -64,6 +65,8 @@ __all__ = [
     "optimize_portfolio",
     "fundamental_subscore",
     "sentiment_subscore",
+    "build_event_risk",
+    "parse_earnings_csv",
     "Alert",
     "AlertStore",
     "CalibrationLog",
