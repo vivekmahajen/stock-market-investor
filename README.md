@@ -163,8 +163,9 @@ set ALPHAVANTAGE_API_KEY=YOURKEY        # Windows (cmd);  export on macOS/Linux
 python -m atlas.cli analyze AAPL --alpha-vantage
 python -m atlas.cli analyze AAPL --alpha-vantage --api-key YOURKEY   # or pass inline
 
-# 2. Your own CSV files named <SYMBOL>_<TIMEFRAME>.csv (ts,open,high,low,close,volume)
+# 2. Your own CSV files (headers auto-detected; see below)
 python -m atlas.cli analyze AAPL --csv ./mydata
+python -m atlas.cli backtest AAPL --csv ./mydata --lookback 600   # long history = real backtests
 
 # 3. Synthetic (default) — deterministic, seeded, always flagged simulated
 python -m atlas.cli analyze AAPL
@@ -195,6 +196,22 @@ detects those and raises a clear message instead of mis-parsing.
 bot-verification wall in front of its CSV endpoint, so a plain HTTP client can no
 longer fetch it; `StooqProvider` detects that page and says so. Still usable if
 you download CSVs through a browser and feed them via `--csv`.
+
+**CSV files (`--csv`).** Point `--csv` at a directory of files. The parser
+**auto-detects the column layout**, so files exported from common sources load
+without editing:
+
+- Native `ts,open,high,low,close,volume`
+- Stooq `Date,Open,High,Low,Close,Volume`
+- Alpha Vantage `timestamp,open,high,low,close,volume` (newest-first is fine)
+- Yahoo `Date,...,Adj Close,Volume` (uses `Adj Close` if no plain close)
+
+Date formats (ISO, `YYYY-MM-DD`, `MM/DD/YYYY`, etc.), newest- or oldest-first
+ordering, and a missing volume column are all handled; sentinel rows (`N/D`) are
+skipped, not guessed. Files are found by `<SYMBOL>_<TIMEFRAME>.csv` or simply
+`<SYMBOL>.csv`. **This is the way to get full-history real backtests for free:**
+download a ticker's complete history from a browser (which passes any anti-bot
+wall), drop the file in a folder, and run `--csv`.
 
 **Blocked networks.** If your environment restricts outbound HTTPS (egress
 policy, firewall), the live providers surface the blocked-host error cleanly —

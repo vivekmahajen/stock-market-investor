@@ -53,11 +53,102 @@ class DataProvider(ABC):
         )
 
 
-class CSVProvider(DataProvider):
-    """Loads OHLCV from CSV files named ``<SYMBOL>_<TIMEFRAME>.csv``.
+# Canonical field -> accepted header aliases (matched case-insensitively, spaces
+# and underscores normalised). Lets files from Stooq (Date,Open,...), Alpha
+# Vantage (timestamp,open,...), Yahoo (Date,...,Adj Close), and the native
+# ts,open,... layout all load without manual editing.
+_CSV_ALIASES = {
+    "ts": ("ts", "date", "timestamp", "datetime", "time"),
+    "open": ("open", "o"),
+    "high": ("high", "h"),
+    "low": ("low", "l"),
+    "close": ("close", "c", "last", "price", "closelast"),
+    "adj_close": ("adjclose", "adjustedclose", "adjcloseprice"),
+    "volume": ("volume", "vol", "v"),
+}
 
-    Expected header: ``ts,open,high,low,close,volume`` with ISO-8601 timestamps.
-    This is real data (whatever you put in the files), so ``simulated`` is False.
+_TS_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d-%m-%Y", "%Y%m%d")
+
+
+def _norm(name: str) -> str:
+    return name.strip().lower().replace(" ", "").replace("_", "").replace(".", "")
+
+
+def _parse_ts(value: str) -> datetime:
+    value = value.strip()
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    for fmt in _TS_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"Unrecognised timestamp format: {value!r}")
+
+
+def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
+    """Parse a CSV string into an OHLCV series, auto-detecting the column layout.
+
+    Returns ``(OHLCV, skipped_rows)``. Raises ``ValueError`` when required
+    columns (date + OHLC) cannot be found. Malformed/sentinel rows are skipped,
+    not guessed.
+    """
+    import io
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise ValueError(f"Empty or headerless CSV for '{symbol}'.")
+
+    # Resolve each canonical field to its actual header name.
+    normalised = {_norm(h): h for h in reader.fieldnames}
+    resolved = {}
+    for field, aliases in _CSV_ALIASES.items():
+        for alias in aliases:
+            if alias in normalised:
+                resolved[field] = normalised[alias]
+                break
+
+    if "ts" not in resolved:
+        raise ValueError(f"No date/timestamp column found in {reader.fieldnames} for '{symbol}'.")
+    close_key = resolved.get("close") or resolved.get("adj_close")
+    if not all(k in resolved for k in ("open", "high", "low")) or not close_key:
+        raise ValueError(f"Missing OHLC columns in {reader.fieldnames} for '{symbol}'.")
+
+    bars: List[Bar] = []
+    skipped = 0
+    for row in reader:
+        try:
+            bars.append(
+                Bar(
+                    ts=_parse_ts(row[resolved["ts"]]),
+                    open=float(row[resolved["open"]]),
+                    high=float(row[resolved["high"]]),
+                    low=float(row[resolved["low"]]),
+                    close=float(row[close_key]),
+                    volume=float(row[resolved["volume"]]) if resolved.get("volume") and row.get(resolved["volume"]) not in (None, "") else 0.0,
+                )
+            )
+        except (KeyError, ValueError, TypeError):
+            skipped += 1
+            continue
+    if not bars:
+        raise ValueError(f"No usable data rows in CSV for '{symbol}'.")
+    return OHLCV.from_bars(symbol, timeframe, bars), skipped
+
+
+class CSVProvider(DataProvider):
+    """Loads OHLCV from CSV files in a directory, auto-detecting the layout.
+
+    Accepts common column layouts (native ``ts,open,high,low,close,volume``,
+    Stooq ``Date,Open,...``, Alpha Vantage ``timestamp,open,...``, Yahoo with
+    ``Adj Close``) and a range of date formats, so browser-downloaded files load
+    without editing. This is real data, so ``simulated`` is False.
+
+    File resolution tries, in order: ``<SYMBOL>_<TIMEFRAME>.csv``, a lower-cased
+    variant, and ``<SYMBOL>.csv`` — so a file simply named ``aapl.csv`` works.
     """
 
     simulated = False
@@ -65,28 +156,33 @@ class CSVProvider(DataProvider):
 
     def __init__(self, directory: str):
         self.directory = directory
+        self.last_skipped_rows = 0
 
     def _path(self, symbol: str, timeframe: str) -> str:
         import os
 
-        return os.path.join(self.directory, f"{symbol}_{timeframe}.csv")
+        candidates = [
+            f"{symbol}_{timeframe}.csv",
+            f"{symbol.lower()}_{timeframe.lower()}.csv",
+            f"{symbol.upper()}_{timeframe}.csv",
+            f"{symbol}.csv",
+            f"{symbol.lower()}.csv",
+            f"{symbol.upper()}.csv",
+        ]
+        for name in candidates:
+            path = os.path.join(self.directory, name)
+            if os.path.exists(path):
+                return path
+        raise FileNotFoundError(
+            f"No CSV for '{symbol}' ({timeframe}) in {self.directory}. Looked for: "
+            + ", ".join(dict.fromkeys(candidates))
+        )
 
     def get_ohlcv(self, symbol: str, timeframe: str, lookback: int) -> OHLCV:
-        path = self._path(symbol, timeframe)
-        bars: List[Bar] = []
-        with open(path, newline="") as f:
-            for row in csv.DictReader(f):
-                bars.append(
-                    Bar(
-                        ts=datetime.fromisoformat(row["ts"]),
-                        open=float(row["open"]),
-                        high=float(row["high"]),
-                        low=float(row["low"]),
-                        close=float(row["close"]),
-                        volume=float(row["volume"]),
-                    )
-                )
-        series = OHLCV.from_bars(symbol, timeframe, bars)
+        with open(self._path(symbol, timeframe), newline="") as f:
+            text = f.read()
+        series, skipped = parse_ohlcv_csv(text, symbol, timeframe)
+        self.last_skipped_rows = skipped
         return series.tail(lookback) if lookback else series
 
     def get_quote(self, symbol: str) -> Quote:
