@@ -113,6 +113,7 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/events.py` | Earnings-calendar event risk: days-to-report, risk level, defer/size-down warning | 2, 6, 12 |
 | `atlas/options.py` | Black-Scholes price, full greeks (delta/gamma/theta/vega/rho), implied-vol solver | 3 |
 | `atlas/report.py` | Human-readable text rendering of analyze / signal / backtest / option outputs | 15 |
+| `atlas/web.py` | Local web dashboard (stdlib server + single-page UI) that runs the real engine | — |
 | `atlas/screen.py` | Transparent, filterable, composite-ranked screener with liquidity flags | 7 |
 | `atlas/portfolio.py` | Pure-Python optimizer (equal-weight / inverse-vol / min-variance / max-Sharpe), correlation, beta, stress test | 11 |
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
@@ -163,6 +164,21 @@ python -m atlas.cli screen AAPL,MSFT,NVDA,AMD --above-ema50 --limit 5
 # Optimize a portfolio (min-variance) vs a benchmark
 python -m atlas.cli portfolio AAPL,MSFT,NVDA --objective min_variance --benchmark SPY
 ```
+
+### Web dashboard
+
+A local, zero-dependency web dashboard runs the real engine behind a browser UI —
+enter a symbol, pick a data source, and see the full ATLAS analysis rendered as
+cards (score, sub-scores, levels, patterns, fundamentals/sentiment, events, notes).
+
+```bash
+python -m atlas.cli serve            # then open http://127.0.0.1:8787
+# or: python -m atlas.web --port 9000
+```
+
+Pick **Synthetic** (demo, no key), **Alpha Vantage** (enter your free key; toggle
+fundamentals/news/events), or **CSV** (reads `SYMBOL_1d.csv` from a folder). It is
+a *local* development server bound to localhost — not hardened for public exposure.
 
 ### Real market data
 

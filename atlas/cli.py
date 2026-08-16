@@ -104,6 +104,10 @@ def main(argv=None) -> int:
     pd.add_argument("--max-weight", type=float, default=None)
     pd.add_argument("--benchmark", default=None)
 
+    pw = sub.add_parser("serve", help="launch the web dashboard")
+    pw.add_argument("--host", default="127.0.0.1")
+    pw.add_argument("--port", type=int, default=8787)
+
     po = sub.add_parser("option", parents=[common], help="Black-Scholes price + greeks (+ implied vol)")
     po.add_argument("--spot", type=float, required=True)
     po.add_argument("--strike", type=float, required=True)
@@ -115,6 +119,12 @@ def main(argv=None) -> int:
     po.add_argument("--price", type=float, default=None, help="market price (to imply vol)")
 
     args = p.parse_args(argv)
+
+    if args.cmd == "serve":
+        from .web import serve
+        serve(args.host, args.port)
+        return 0
+
     reg = _registry(args)
 
     if args.cmd == "analyze":
