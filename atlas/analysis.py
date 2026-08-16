@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 from . import indicators as ind
 from . import scoring
+from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
@@ -74,12 +75,15 @@ def analyze(
     timeframe: str = "1d",
     lookback: int = 300,
     benchmark: Optional[str] = None,
+    with_fundamentals: bool = False,
+    with_sentiment: bool = False,
 ) -> dict:
     """Full workup for ``analyze <symbol>`` producing the Section 15 envelope.
 
-    Returns the structured JSON object (schema in Section 15). Sentiment and
-    fundamental sub-scores are ``None`` here because this reference build has no
-    news/fundamentals feed wired in — the honest default, not a fabricated value.
+    ``with_fundamentals`` / ``with_sentiment`` opt into extra data-feed calls
+    (each an API request) that fill the fundamental and sentiment sub-scores.
+    Left off, those sub-scores are ``None`` — the honest default, not a
+    fabricated value.
     """
     registry = registry or ToolRegistry()
     fetched = registry.get_ohlcv(symbol, timeframe, lookback)
@@ -112,12 +116,41 @@ def analyze(
             "relative_strength is null: no benchmark given. Pass benchmark=<symbol> "
             "(and provide that symbol's data) to compute relative strength."
         )
-    notes.append("fundamental & sentiment sub-scores are null: no fundamentals/news feed wired in.")
+
+    fund = None
+    fundamentals_detail = None
+    if with_fundamentals:
+        fr = registry.get_fundamentals(symbol)
+        if "error" in fr:
+            notes.append(f"fundamental is null: {fr['error']}.")
+        else:
+            fundamentals_detail = fundamental_subscore(fr["overview"])
+            if fundamentals_detail is None:
+                notes.append("fundamental is null: too few fundamental factors available for a score.")
+            else:
+                fund = fundamentals_detail["score"]
+    else:
+        notes.append("fundamental is null: pass with_fundamentals=True (a fundamentals feed) to compute it.")
+
+    sent = None
+    sentiment_detail = None
+    if with_sentiment:
+        nr = registry.get_news_sentiment(symbol)
+        if "error" in nr:
+            notes.append(f"sentiment is null: {nr['error']}.")
+        else:
+            sentiment_detail = sentiment_subscore(nr["news"], symbol)
+            if sentiment_detail is None:
+                notes.append("sentiment is null: news feed returned no usable articles.")
+            else:
+                sent = sentiment_detail["score"]
+    else:
+        notes.append("sentiment is null: pass with_sentiment=True (a news feed) to compute it.")
 
     subscores = {
         "technical": tech,
-        "fundamental": None,   # no fundamentals feed in this build
-        "sentiment": None,     # no news feed in this build
+        "fundamental": fund,
+        "sentiment": sent,
         "relative_strength": rs,
         "risk": _risk_subscore(series),
     }
@@ -155,6 +188,8 @@ def analyze(
         },
         "fibonacci": fib,
         "patterns": patterns,
+        "fundamentals_detail": fundamentals_detail,
+        "sentiment_detail": sentiment_detail,
         "events": [],  # no calendar feed in this build; must be checked before a live signal
         "notes": notes,
         "data_provenance": prov,
