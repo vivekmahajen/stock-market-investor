@@ -8,33 +8,33 @@ Legend: `[ ]` not started · `[~]` partial · `[x]` done.
 
 ---
 
-## A. Indicator library (§4) — `atlas/indicators.py`
+## A. Indicator library (§4) — `atlas/indicators.py` ✅ DONE
 Built: SMA, EMA, WMA, RSI, MACD, ATR, ATR%, Bollinger, Stochastic, ADX/DMI, OBV, ROC, VWAP, relative volume.
 
-- [ ] A1. `hma` — Hull moving average
-- [ ] A2. `vwma` — volume-weighted moving average
-- [ ] A3. `anchored_vwap` — VWAP from an anchor index
-- [ ] A4. `supertrend`
-- [ ] A5. `ichimoku` — tenkan/kijun/senkou A-B/chikou
-- [ ] A6. `parabolic_sar`
-- [ ] A7. `linreg_channel` — linear-regression channel
-- [ ] A8. `stoch_rsi`
-- [ ] A9. `cci` — Commodity Channel Index
-- [ ] A10. `williams_r`
-- [ ] A11. `tsi` — True Strength Index
-- [ ] A12. `mfi` — Money Flow Index
-- [ ] A13. `rsi_divergence` — bullish/bearish divergence detection
-- [ ] A14. `keltner_channels`
-- [ ] A15. `donchian_channels`
-- [ ] A16. `historical_volatility`
-- [ ] A17. `choppiness_index`
-- [ ] A18. `ad_line` — accumulation/distribution
-- [ ] A19. `cmf` — Chaikin Money Flow
-- [ ] A20. `vwap_bands`
-- [ ] A21. `volume_profile` — POC / value area / HVN-LVN
-- [ ] A22. `rs_rating` — relative-strength percentile vs benchmark
-- [ ] A23. `beta` / `correlation` exposed as standalone indicators (exist in portfolio)
-- [~] A24. `cumulative_delta` — needs bid/ask tick data; mark N/A unless a feed provides it
+- [x] A1. `hma` — Hull moving average
+- [x] A2. `vwma` — volume-weighted moving average
+- [x] A3. `anchored_vwap` — VWAP from an anchor index
+- [x] A4. `supertrend`
+- [x] A5. `ichimoku` — tenkan/kijun/senkou A-B/chikou
+- [x] A6. `parabolic_sar`
+- [x] A7. `linreg_channel` — linear-regression channel
+- [x] A8. `stoch_rsi`
+- [x] A9. `cci` — Commodity Channel Index
+- [x] A10. `williams_r`
+- [x] A11. `tsi` — True Strength Index
+- [x] A12. `mfi` — Money Flow Index
+- [x] A13. `rsi_divergence` — bullish/bearish divergence detection
+- [x] A14. `keltner_channels`
+- [x] A15. `donchian_channels`
+- [x] A16. `historical_volatility`
+- [x] A17. `choppiness_index`
+- [x] A18. `ad_line` — accumulation/distribution
+- [x] A19. `cmf` — Chaikin Money Flow
+- [x] A20. `vwap_bands`
+- [x] A21. `volume_profile` — POC / value area / HVN-LVN
+- [x] A22. `rs_rating` — relative-strength percentile vs benchmark
+- [x] A23. `beta` / `correlation` exposed as standalone indicators
+- [~] A24. `cumulative_delta` — N/A: requires bid/ask tick data no OHLCV feed provides
 
 ## B. Structure detection (§4) — `atlas/levels.py`
 Built: horizontal S/R by touch-count, swing pivots, Fibonacci (in `fibonacci.py`).

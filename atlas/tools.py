@@ -93,6 +93,41 @@ class ToolRegistry:
                 out[spec] = _last(ind.obv(series))
             elif spec == "rvol":
                 out[spec] = _last(ind.relative_volume(series))
+            elif spec == "cci":
+                out[spec] = _last(ind.cci(series))
+            elif spec == "williams_r":
+                out[spec] = _last(ind.williams_r(series))
+            elif spec == "mfi":
+                out[spec] = _last(ind.mfi(series))
+            elif spec == "stoch_rsi":
+                s = ind.stoch_rsi(close)
+                out[spec] = {"k": _last(s["k"]), "d": _last(s["d"])}
+            elif spec == "supertrend":
+                s = ind.supertrend(series)
+                out[spec] = {"supertrend": _last(s["supertrend"]), "direction": _last(s["direction"])}
+            elif spec == "ichimoku":
+                ich = ind.ichimoku(series)
+                out[spec] = {k: _last(v) for k, v in ich.items()}
+            elif spec == "keltner":
+                k = ind.keltner_channels(series)
+                out[spec] = {"upper": _last(k["upper"]), "middle": _last(k["middle"]), "lower": _last(k["lower"])}
+            elif spec == "donchian":
+                d = ind.donchian_channels(series)
+                out[spec] = {"upper": _last(d["upper"]), "middle": _last(d["middle"]), "lower": _last(d["lower"])}
+            elif spec == "cmf":
+                out[spec] = _last(ind.cmf(series))
+            elif spec == "hist_vol":
+                out[spec] = _last(ind.historical_volatility(close))
+            elif spec == "choppiness":
+                out[spec] = _last(ind.choppiness_index(series))
+            elif spec == "psar":
+                out[spec] = _last(ind.parabolic_sar(series))
+            elif spec == "hma":
+                out[spec] = _last(ind.hma(close, 16))
+            elif spec == "vwma":
+                out[spec] = _last(ind.vwma(series))
+            elif spec == "volume_profile":
+                out[spec] = ind.volume_profile(series)
             else:
                 out[spec] = {"error": f"unknown indicator spec '{spec}'"}
         return out
