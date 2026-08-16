@@ -16,7 +16,7 @@ from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
-from .levels import nearest_levels
+from .levels import classify_by_price, nearest_levels
 from .patterns import latest_patterns
 from .risk import r_multiple, size_position
 from .tools import ToolRegistry
@@ -175,7 +175,7 @@ def analyze(
     }
     score = scoring.atlas_score(subscores)
 
-    levels = registry.detect_levels(series)
+    levels = classify_by_price(series)
     near = nearest_levels(series)
     patterns = {
         "candlestick": latest_patterns(series, lookback=5),

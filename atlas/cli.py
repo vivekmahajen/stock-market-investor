@@ -58,6 +58,8 @@ def main(argv=None) -> int:
     common.add_argument("--premium", action="store_true",
                         help="Alpha Vantage premium key (enables full-history outputsize)")
     common.add_argument("--seed", type=int, default=42, help="synthetic-feed seed")
+    common.add_argument("--format", choices=["json", "text"], default="json",
+                        help="output format: json (default, machine-readable) or text")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pa = sub.add_parser("analyze", parents=[common], help="full workup")
@@ -102,6 +104,16 @@ def main(argv=None) -> int:
     pd.add_argument("--max-weight", type=float, default=None)
     pd.add_argument("--benchmark", default=None)
 
+    po = sub.add_parser("option", parents=[common], help="Black-Scholes price + greeks (+ implied vol)")
+    po.add_argument("--spot", type=float, required=True)
+    po.add_argument("--strike", type=float, required=True)
+    po.add_argument("--dte", type=float, required=True, help="days to expiry")
+    po.add_argument("--kind", default="call", choices=["call", "put"])
+    po.add_argument("--rate", type=float, default=0.04, help="risk-free rate (annual)")
+    po.add_argument("--div-yield", type=float, default=0.0)
+    po.add_argument("--vol", type=float, default=None, help="volatility (to price)")
+    po.add_argument("--price", type=float, default=None, help="market price (to imply vol)")
+
     args = p.parse_args(argv)
     reg = _registry(args)
 
@@ -142,11 +154,20 @@ def main(argv=None) -> int:
         symbols = [s.strip() for s in args.symbols.split(",")]
         out = reg.optimize_portfolio(symbols, objective=args.objective,
                                      max_weight=args.max_weight, benchmark=args.benchmark)
+    elif args.cmd == "option":
+        from .options import option_analysis
+        out = option_analysis(args.spot, args.strike, args.dte / 365.0, args.rate,
+                              kind=args.kind, q=args.div_yield, sigma=args.vol, price=args.price)
     else:  # pragma: no cover
         p.error("unknown command")
         return 2
 
-    print(json.dumps(out, indent=2, default=str))
+    if getattr(args, "format", "json") == "text":
+        from .report import render
+        text = render(args.cmd, out)
+        print(text if text else json.dumps(out, indent=2, default=str))
+    else:
+        print(json.dumps(out, indent=2, default=str))
     return 0
 
 
