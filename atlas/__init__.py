@@ -26,6 +26,8 @@ from . import (
 from .alerts import Alert, AlertStore
 from .analysis import analyze, build_signal, classify_regime, confluence_score
 from .backtest import run_backtest, verdict
+from .robustness import (parameter_sensitivity, sub_period_analysis,
+                         train_test_split, walk_forward)
 from .calibration import CalibrationLog, SignalRecord
 from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
@@ -62,6 +64,10 @@ __all__ = [
     "confluence_score",
     "run_backtest",
     "verdict",
+    "train_test_split",
+    "walk_forward",
+    "parameter_sensitivity",
+    "sub_period_analysis",
     "run_screen",
     "optimize_portfolio",
     "fundamental_subscore",
