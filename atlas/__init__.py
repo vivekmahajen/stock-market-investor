@@ -24,7 +24,7 @@ from . import (
     seasonality,
 )
 from .alerts import Alert, AlertStore
-from .analysis import analyze, build_signal, classify_regime, confluence_score
+from .analysis import analyze, build_signal, classify_regime, confluence_score, propose_signal
 from .backtest import run_backtest, verdict
 from .robustness import (parameter_sensitivity, sub_period_analysis,
                          train_test_split, walk_forward)
@@ -60,6 +60,7 @@ __all__ = [
     "auto_fibonacci",
     "analyze",
     "build_signal",
+    "propose_signal",
     "classify_regime",
     "confluence_score",
     "run_backtest",

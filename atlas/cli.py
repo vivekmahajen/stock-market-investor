@@ -74,14 +74,17 @@ def main(argv=None) -> int:
     pa.add_argument("--events", action="store_true",
                     help="check the earnings calendar for event risk (extra API call)")
 
-    ps = sub.add_parser("signal", parents=[common], help="risk-defined trade plan")
+    ps = sub.add_parser("signal", parents=[common],
+                        help="risk-defined trade plan (auto-proposed if entry/stop/targets omitted)")
     ps.add_argument("symbol")
-    ps.add_argument("--entry", type=float, required=True)
-    ps.add_argument("--stop", type=float, required=True)
-    ps.add_argument("--targets", required=True, help="comma-separated target prices")
+    ps.add_argument("--entry", type=float, default=None)
+    ps.add_argument("--stop", type=float, default=None)
+    ps.add_argument("--targets", default=None, help="comma-separated target prices")
     ps.add_argument("--direction", default="long", choices=["long", "short"])
     ps.add_argument("--equity", type=float, default=100_000)
     ps.add_argument("--risk-pct", type=float, default=0.01)
+    ps.add_argument("--timeframe", default="1d")
+    ps.add_argument("--lookback", type=int, default=300)
     ps.add_argument("--events", action="store_true",
                     help="check the earnings calendar before issuing the plan (extra API call)")
 
@@ -136,19 +139,26 @@ def main(argv=None) -> int:
                       with_fundamentals=args.fundamentals, with_sentiment=args.sentiment,
                       with_events=args.events)
     elif args.cmd == "signal":
-        targets = [float(x) for x in args.targets.split(",")]
-        events = None
-        if args.events:
-            from datetime import datetime, timezone
+        if args.entry is None or args.stop is None or args.targets is None:
+            # Auto-propose the full plan from the analysis.
+            from .analysis import propose_signal
+            out = propose_signal(args.symbol, registry=reg, account_equity=args.equity,
+                                 risk_pct=args.risk_pct, timeframe=args.timeframe,
+                                 lookback=args.lookback, with_events=args.events)
+        else:
+            targets = [float(x) for x in args.targets.split(",")]
+            events = None
+            if args.events:
+                from datetime import datetime, timezone
 
-            from .events import build_event_risk
-            er = reg.get_earnings_calendar(args.symbol)
-            if "error" in er:
-                events = [{"type": "earnings", "error": er["error"]}]
-            else:
-                events = build_event_risk(er["earnings"], datetime.now(timezone.utc).date())
-        out = build_signal(args.symbol, args.entry, args.stop, targets, args.direction,
-                           args.equity, args.risk_pct, events=events)
+                from .events import build_event_risk
+                er = reg.get_earnings_calendar(args.symbol)
+                if "error" in er:
+                    events = [{"type": "earnings", "error": er["error"]}]
+                else:
+                    events = build_event_risk(er["earnings"], datetime.now(timezone.utc).date())
+            out = build_signal(args.symbol, args.entry, args.stop, targets, args.direction,
+                               args.equity, args.risk_pct, events=events)
     elif args.cmd == "backtest":
         fetched = reg.get_ohlcv(args.symbol, args.timeframe, args.lookback)
         if "error" in fetched:

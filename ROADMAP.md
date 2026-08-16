@@ -72,15 +72,17 @@ Harmonic — `atlas/harmonics.py`
 Base rates — `atlas/patterns.py` / new
 - [ ] C15. `pattern_base_rate` — empirical follow-through study over the series (fills the `base_rate: null` fields)
 
-## D. Signal enrichment (§6) — `atlas/analysis.py`
+## D. Signal enrichment (§6) — `atlas/analysis.py` ✅ DONE
 Built: entry/stop/targets/R/position-size, sub-threshold-R rejection, event attachment.
 
-- [ ] D1. numeric `confidence` (0–100) with drivers (from confluence + score + pattern alignment)
-- [ ] D2. one-line `setup_thesis` generator
-- [ ] D3. `biggest_risk` field
-- [ ] D4. `what_would_make_me_wrong` / invalidation-in-words
-- [ ] D5. `catalyst_or_expiry` tied to the event calendar
-- [ ] D6. `propose_signal(symbol)` — auto-derive entry/stop (structure) + targets (levels/fib) from analysis
+- [x] D1. numeric `confidence` (0–100) with drivers (confluence + technical + pattern alignment − event penalty)
+- [x] D2. one-line `thesis` generator
+- [x] D3. `biggest_risk` field
+- [x] D4. `what_would_make_me_wrong` / invalidation-in-words (auto-derived from stop when manual)
+- [x] D5. `catalyst_or_expiry` tied to the event calendar
+- [x] D6. `propose_signal(symbol)` — auto-derive direction/entry/stop/targets from structure & Fibonacci; returns `flat` when no clean setup
+
+CLI: `signal <symbol>` now auto-proposes when entry/stop/targets are omitted.
 
 ## E. Backtesting robustness (§8) — `atlas/robustness.py` ✅ DONE
 Built: next-bar-open engine, costs/slippage, full metrics, small-sample verdict.
