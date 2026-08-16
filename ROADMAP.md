@@ -36,15 +36,17 @@ Built: SMA, EMA, WMA, RSI, MACD, ATR, ATR%, Bollinger, Stochastic, ADX/DMI, OBV,
 - [x] A23. `beta` / `correlation` exposed as standalone indicators
 - [~] A24. `cumulative_delta` — N/A: requires bid/ask tick data no OHLCV feed provides
 
-## B. Structure detection (§4) — `atlas/levels.py`
+## B. Structure detection (§4) — `atlas/levels.py` ✅ DONE
 Built: horizontal S/R by touch-count, swing pivots, Fibonacci (in `fibonacci.py`).
 
-- [ ] B1. `detect_trendlines` — dynamic auto-adjusting trendlines
-- [ ] B2. `detect_channels` — parallel channel from trendlines
-- [ ] B3. `pivot_points` — classic / Camarilla / Woodie
-- [ ] B4. `detect_gaps` — up/down gaps + fill status
-- [ ] B5. `volume_profile_levels` — POC / value-area / node levels (shares A21)
-- [ ] B6. S/R weighting by volume (currently touch-count only)
+- [x] B1. `detect_trendlines` — least-squares support/resistance trendlines with slope, projection, touches
+- [x] B2. `detect_channels` — parallel-channel detection from the trendlines
+- [x] B3. `pivot_points` — classic / Camarilla / Woodie
+- [x] B4. `detect_gaps` — up/down gaps + fill status
+- [x] B5. `volume_profile_levels` — POC / value-area / HVN-LVN (wraps the indicator)
+- [x] B6. S/R weighting by volume — `Level.volume` + `strength` (touches × volume share)
+
+Surfaced in the analyze envelope (`structure`) and `ToolRegistry.detect_structure`.
 
 ## C. Patterns (§5)
 Built candlestick: doji, hammer, engulfing, marubozu, shooting star. Classical: H&S (+inv), double top/bottom, triangles. Harmonic: Gartley, Bat, Butterfly, Crab, Shark.

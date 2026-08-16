@@ -135,6 +135,16 @@ class ToolRegistry:
     def detect_levels(self, series: OHLCV) -> dict:
         return lvl.detect_levels(series)
 
+    def detect_structure(self, series: OHLCV) -> dict:
+        """Trendlines, channels, pivot points, gaps, and volume-profile levels (§4)."""
+        return {
+            "trendlines": lvl.detect_trendlines(series),
+            "channel": lvl.detect_channels(series),
+            "pivots": lvl.pivot_points(series),
+            "gaps": lvl.detect_gaps(series),
+            "volume_profile": lvl.volume_profile_levels(series),
+        }
+
     def detect_patterns(self, series: OHLCV, families: Optional[List[str]] = None) -> dict:
         """Detect patterns across requested families (Section 5).
 

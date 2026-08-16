@@ -17,6 +17,8 @@ class Level:
     kind: str          # "support" | "resistance"
     touches: int
     last_touch_index: int
+    volume: float = 0.0
+    strength: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -24,6 +26,8 @@ class Level:
             "kind": self.kind,
             "touches": self.touches,
             "last_touch_index": self.last_touch_index,
+            "volume": round(self.volume, 0),
+            "strength": round(self.strength, 2),
         }
 
 
@@ -49,8 +53,9 @@ def detect_levels(series: OHLCV, left: int = 2, right: int = 2, tolerance_pct: f
     how many pivots formed the level (a proxy for its strength).
     """
     swings = swing_points(series, left, right)
-    resistances = _cluster(series.high, swings["highs"], tolerance_pct, "resistance")
-    supports = _cluster(series.low, swings["lows"], tolerance_pct, "support")
+    resistances = _cluster(series.high, series.volume, swings["highs"], tolerance_pct, "resistance")
+    supports = _cluster(series.low, series.volume, swings["lows"], tolerance_pct, "support")
+    _score_strength(resistances + supports)
     last = len(series) - 1
     return {
         "support": [l.to_dict() for l in sorted(supports, key=lambda x: -x.price)],
@@ -61,23 +66,32 @@ def detect_levels(series: OHLCV, left: int = 2, right: int = 2, tolerance_pct: f
     }
 
 
-def _cluster(prices, indices: List[int], tolerance_pct: float, kind: str) -> List[Level]:
+def _cluster(prices, volumes, indices: List[int], tolerance_pct: float, kind: str) -> List[Level]:
     levels: List[Level] = []
     for idx in indices:
         p = prices[idx]
         merged = False
         for lv in levels:
             if lv.price and abs(p - lv.price) / lv.price * 100.0 <= tolerance_pct:
-                # Weighted-average the level price and bump the touch count.
+                # Weighted-average the level price and bump the touch count + volume.
                 total = lv.touches + 1
                 lv.price = (lv.price * lv.touches + p) / total
                 lv.touches = total
+                lv.volume += volumes[idx]
                 lv.last_touch_index = max(lv.last_touch_index, idx)
                 merged = True
                 break
         if not merged:
-            levels.append(Level(price=p, kind=kind, touches=1, last_touch_index=idx))
+            levels.append(Level(price=p, kind=kind, touches=1, last_touch_index=idx, volume=volumes[idx]))
     return levels
+
+
+def _score_strength(levels: List[Level]) -> None:
+    """Strength = touch-count boosted by the level's share of touch-volume (B6)."""
+    max_vol = max((l.volume for l in levels), default=0.0)
+    for l in levels:
+        vol_share = (l.volume / max_vol) if max_vol > 0 else 0.0
+        l.strength = l.touches * (1.0 + vol_share)
 
 
 def classify_by_price(series: OHLCV, **kwargs) -> dict:
@@ -116,3 +130,159 @@ def nearest_levels(series: OHLCV, **kwargs) -> dict:
         "support_below": max(below, key=lambda x: x["price"]) if below else None,
         "resistance_above": min(above, key=lambda x: x["price"]) if above else None,
     }
+
+
+# --------------------------------------------------------------------------- #
+# B1/B2. Trendlines & channels
+# --------------------------------------------------------------------------- #
+def _fit_line(points):
+    """Least-squares (slope, intercept) over [(x, y), ...]; None if degenerate."""
+    n = len(points)
+    if n < 2:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    mx, my = sum(xs) / n, sum(ys) / n
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return None
+    slope = sum((xs[k] - mx) * (ys[k] - my) for k in range(n)) / den
+    return slope, my - slope * mx
+
+
+def detect_trendlines(series: OHLCV, left: int = 2, right: int = 2,
+                      tolerance_pct: float = 1.5, max_points: int = 5) -> dict:
+    """Fit dynamic support/resistance trendlines through recent swing pivots.
+
+    Each trendline reports slope (per bar), its value projected to the last bar,
+    and how many pivots lie on it (touches).
+    """
+    sw = swing_points(series, left, right)
+    last = len(series) - 1
+
+    def build(indices, price_arr, kind):
+        pts = [(i, price_arr[i]) for i in indices][-max_points:]
+        fit = _fit_line(pts)
+        if not fit:
+            return None
+        slope, intercept = fit
+        touches = sum(
+            1 for i in indices
+            if price_arr[i] and abs(price_arr[i] - (slope * i + intercept)) / price_arr[i] * 100.0 <= tolerance_pct
+        )
+        return {
+            "slope": round(slope, 6),
+            "intercept": round(intercept, 4),
+            "current_value": round(slope * last + intercept, 4),
+            "touches": touches,
+            "points": [[i, round(price_arr[i], 4)] for i, _ in pts],
+            "direction": "rising" if slope > 0 else "falling" if slope < 0 else "flat",
+        }
+
+    return {
+        "support": build(sw["lows"], series.low, "support"),
+        "resistance": build(sw["highs"], series.high, "resistance"),
+    }
+
+
+def detect_channels(series: OHLCV, **kwargs) -> Optional[dict]:
+    """A channel when the support and resistance trendlines are roughly parallel."""
+    tl = detect_trendlines(series, **kwargs)
+    sup, res = tl["support"], tl["resistance"]
+    if not sup or not res:
+        return None
+    scale = abs(sup["slope"]) + abs(res["slope"]) or 1e-9
+    parallel = abs(sup["slope"] - res["slope"]) <= 0.35 * scale
+    return {
+        "upper": res["current_value"],
+        "lower": sup["current_value"],
+        "width": round(res["current_value"] - sup["current_value"], 4),
+        "support_slope": sup["slope"],
+        "resistance_slope": res["slope"],
+        "parallel": parallel,
+        "type": ("ascending" if sup["slope"] > 0 and res["slope"] > 0 else
+                 "descending" if sup["slope"] < 0 and res["slope"] < 0 else "horizontal/other"),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# B3. Pivot points (classic / Camarilla / Woodie)
+# --------------------------------------------------------------------------- #
+def pivot_points(series: OHLCV) -> Optional[dict]:
+    """Classic, Camarilla, and Woodie pivots from the last completed bar."""
+    if len(series) == 0:
+        return None
+    i = len(series) - 1
+    H, L, C = series.high[i], series.low[i], series.close[i]
+    rng = H - L
+
+    p = (H + L + C) / 3.0
+    classic = {
+        "P": p, "R1": 2 * p - L, "S1": 2 * p - H, "R2": p + rng, "S2": p - rng,
+        "R3": H + 2 * (p - L), "S3": L - 2 * (H - p),
+    }
+    cam = {
+        "R1": C + rng * 1.1 / 12, "S1": C - rng * 1.1 / 12,
+        "R2": C + rng * 1.1 / 6, "S2": C - rng * 1.1 / 6,
+        "R3": C + rng * 1.1 / 4, "S3": C - rng * 1.1 / 4,
+        "R4": C + rng * 1.1 / 2, "S4": C - rng * 1.1 / 2,
+    }
+    wp = (H + L + 2 * C) / 4.0
+    woodie = {"P": wp, "R1": 2 * wp - L, "S1": 2 * wp - H, "R2": wp + rng, "S2": wp - rng}
+
+    def _round(d):
+        return {k: round(v, 4) for k, v in d.items()}
+
+    return {
+        "based_on": {"high": H, "low": L, "close": C,
+                     "date": series.ts[i].isoformat() if series.ts else None},
+        "classic": _round(classic),
+        "camarilla": _round(cam),
+        "woodie": _round(woodie),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# B4. Gap detection
+# --------------------------------------------------------------------------- #
+def detect_gaps(series: OHLCV, min_pct: float = 0.5) -> List[dict]:
+    """Detect up/down gaps and whether price has since filled them."""
+    n = len(series)
+    gaps: List[dict] = []
+    for i in range(1, n):
+        prev_high, prev_low = series.high[i - 1], series.low[i - 1]
+        if series.low[i] > prev_high:  # gap up
+            size = series.low[i] - prev_high
+            pct = size / prev_high * 100.0 if prev_high else 0.0
+            if pct >= min_pct:
+                filled = any(series.low[j] <= prev_high for j in range(i + 1, n))
+                gaps.append(_gap(series, i, "up", prev_high, series.low[i], pct, filled))
+        elif series.high[i] < prev_low:  # gap down
+            size = prev_low - series.high[i]
+            pct = size / prev_low * 100.0 if prev_low else 0.0
+            if pct >= min_pct:
+                filled = any(series.high[j] >= prev_low for j in range(i + 1, n))
+                gaps.append(_gap(series, i, "down", series.high[i], prev_low, pct, filled))
+    return gaps
+
+
+def _gap(series, i, direction, lo, hi, pct, filled) -> dict:
+    return {
+        "index": i,
+        "date": series.ts[i].isoformat() if series.ts else None,
+        "type": direction,
+        "from": round(lo, 4),
+        "to": round(hi, 4),
+        "size_pct": round(pct, 2),
+        "filled": filled,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# B5. Volume-profile levels
+# --------------------------------------------------------------------------- #
+def volume_profile_levels(series: OHLCV, bins: int = 20, value_area_pct: float = 0.70):
+    """POC / value-area / HVN-LVN levels (delegates to the volume-profile indicator)."""
+    from .indicators import volume_profile
+
+    return volume_profile(series, bins=bins, value_area_pct=value_area_pct)
