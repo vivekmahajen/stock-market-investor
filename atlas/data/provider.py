@@ -71,7 +71,21 @@ _TS_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d-%m-%
 
 
 def _norm(name: str) -> str:
-    return name.strip().lower().replace(" ", "").replace("_", "").replace(".", "")
+    return (
+        name.strip().lower()
+        .replace(" ", "").replace("_", "").replace(".", "").replace("/", "")
+    )
+
+
+def _num(value) -> float:
+    """Parse a numeric cell, tolerating currency symbols and thousands commas
+    (e.g. Nasdaq's ``$305.93`` / ``1,234,500``). Empty/sentinel cells raise."""
+    if value is None:
+        raise ValueError("empty numeric cell")
+    s = str(value).strip().replace("$", "").replace(",", "").replace("%", "")
+    if s == "" or s.upper() in ("N/D", "NULL", "NA", "-"):
+        raise ValueError(f"non-numeric cell: {value!r}")
+    return float(s)
 
 
 def _parse_ts(value: str) -> datetime:
@@ -121,14 +135,15 @@ def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
     skipped = 0
     for row in reader:
         try:
+            vol_key = resolved.get("volume")
             bars.append(
                 Bar(
                     ts=_parse_ts(row[resolved["ts"]]),
-                    open=float(row[resolved["open"]]),
-                    high=float(row[resolved["high"]]),
-                    low=float(row[resolved["low"]]),
-                    close=float(row[close_key]),
-                    volume=float(row[resolved["volume"]]) if resolved.get("volume") and row.get(resolved["volume"]) not in (None, "") else 0.0,
+                    open=_num(row[resolved["open"]]),
+                    high=_num(row[resolved["high"]]),
+                    low=_num(row[resolved["low"]]),
+                    close=_num(row[close_key]),
+                    volume=_num(row[vol_key]) if vol_key and row.get(vol_key) not in (None, "") else 0.0,
                 )
             )
         except (KeyError, ValueError, TypeError):

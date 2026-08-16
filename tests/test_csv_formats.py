@@ -28,6 +28,29 @@ _YAHOO = """Date,Open,High,Low,Close,Adj Close,Volume
 """
 
 
+# Nasdaq browser-download layout: Close/Last column, $-prefixed prices, m/d/Y.
+_NASDAQ = """Date,Close/Last,Volume,Open,High,Low
+08/14/2026,$305.93,62303000,$304.00,$306.50,$303.10
+08/13/2026,$304.10,58414500,$302.00,$305.00,$301.50
+"""
+
+
+def test_nasdaq_layout_currency_and_close_last():
+    s, skipped = parse_ohlcv_csv(_NASDAQ, "MSFT", "1d")
+    assert skipped == 0
+    assert len(s) == 2
+    # $-prefixed prices parsed; Close/Last mapped to close; newest-first sorted.
+    assert s.close[0] == 304.10
+    assert s.close[-1] == 305.93
+    assert s.volume[-1] == 62303000
+
+
+def test_thousands_commas_in_volume():
+    text = "Date,Open,High,Low,Close,Volume\n2024-01-02,100,102,99,101,\"1,234,500\"\n"
+    s, _ = parse_ohlcv_csv(text, "TEST", "1d")
+    assert s.volume[0] == 1234500
+
+
 def test_native_layout():
     s, skipped = parse_ohlcv_csv(_NATIVE, "TEST", "1d")
     assert len(s) == 2 and skipped == 0
