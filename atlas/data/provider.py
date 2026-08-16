@@ -78,18 +78,20 @@ def _norm(name: str) -> str:
 
 
 def _num(value) -> float:
-    """Parse a numeric cell, tolerating currency symbols and thousands commas
-    (e.g. Nasdaq's ``$305.93`` / ``1,234,500``). Empty/sentinel cells raise."""
+    """Parse a numeric cell, tolerating currency symbols, thousands commas, and
+    stray quotes/whitespace (e.g. ``$305.93``, ``"1,234,500"``, ``495.40\\r``).
+    Empty/sentinel cells raise."""
     if value is None:
         raise ValueError("empty numeric cell")
-    s = str(value).strip().replace("$", "").replace(",", "").replace("%", "")
-    if s == "" or s.upper() in ("N/D", "NULL", "NA", "-"):
+    s = str(value).strip().strip('"').strip("'").strip()
+    s = s.replace("$", "").replace(",", "").replace("%", "").replace("\r", "").strip()
+    if s == "" or s.upper() in ("N/D", "NULL", "NA", "N/A", "-", "--"):
         raise ValueError(f"non-numeric cell: {value!r}")
     return float(s)
 
 
 def _parse_ts(value: str) -> datetime:
-    value = value.strip()
+    value = value.strip().strip('"').strip("'").strip()
     try:
         dt = datetime.fromisoformat(value)
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -112,6 +114,7 @@ def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
     """
     import io
 
+    text = text.lstrip("﻿")  # strip a UTF-8 BOM if the file carried one
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise ValueError(f"Empty or headerless CSV for '{symbol}'.")
@@ -133,9 +136,10 @@ def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
 
     bars: List[Bar] = []
     skipped = 0
+    first_error = None
+    vol_key = resolved.get("volume")
     for row in reader:
         try:
-            vol_key = resolved.get("volume")
             bars.append(
                 Bar(
                     ts=_parse_ts(row[resolved["ts"]]),
@@ -146,11 +150,16 @@ def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
                     volume=_num(row[vol_key]) if vol_key and row.get(vol_key) not in (None, "") else 0.0,
                 )
             )
-        except (KeyError, ValueError, TypeError):
+        except (KeyError, ValueError, TypeError) as e:
+            if first_error is None:
+                first_error = f"{type(e).__name__}: {e} | row={row!r}"
             skipped += 1
             continue
     if not bars:
-        raise ValueError(f"No usable data rows in CSV for '{symbol}'.")
+        raise ValueError(
+            f"No usable data rows in CSV for '{symbol}'. "
+            f"Detected columns: {resolved}. First-row failure: {first_error}"
+        )
     return OHLCV.from_bars(symbol, timeframe, bars), skipped
 
 
@@ -194,7 +203,9 @@ class CSVProvider(DataProvider):
         )
 
     def get_ohlcv(self, symbol: str, timeframe: str, lookback: int) -> OHLCV:
-        with open(self._path(symbol, timeframe), newline="") as f:
+        # utf-8-sig transparently strips a BOM; errors='replace' avoids hard
+        # failures on stray bytes so the row-level parser can report specifics.
+        with open(self._path(symbol, timeframe), newline="", encoding="utf-8-sig", errors="replace") as f:
             text = f.read()
         series, skipped = parse_ohlcv_csv(text, symbol, timeframe)
         self.last_skipped_rows = skipped
