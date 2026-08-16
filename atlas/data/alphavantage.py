@@ -213,6 +213,19 @@ class AlphaVantageProvider:
         }
         return self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
 
+    def get_earnings_calendar(self, symbol: str, horizon: str = "3month") -> list:
+        """Upcoming earnings dates for a ticker (EARNINGS_CALENDAR, CSV). Returns
+        parsed rows (possibly empty)."""
+        self._require_key()
+        from ..events import parse_earnings_csv
+
+        params = {"function": "EARNINGS_CALENDAR", "symbol": symbol.upper(),
+                  "horizon": horizon, "apikey": self.api_key or "demo"}
+        text = self._do_fetch(f"{_BASE}?{urllib.parse.urlencode(params)}")
+        if text.lstrip().startswith("{"):
+            raise RuntimeError(_explain_json(text, symbol))
+        return parse_earnings_csv(text)
+
     def _json(self, url: str, symbol: str) -> dict:
         text = self._do_fetch(url)
         try:

@@ -110,6 +110,7 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/seasonality.py` | Calendar-bucketed return stats **with sample sizes** | 3 |
 | `atlas/scoring.py` | Explainable 0–100 ATLAS Score with attribution | 10 |
 | `atlas/fundamentals.py` | Fundamental & news-sentiment sub-scores from a data feed, with factor attribution | 10, 12 |
+| `atlas/events.py` | Earnings-calendar event risk: days-to-report, risk level, defer/size-down warning | 2, 6, 12 |
 | `atlas/screen.py` | Transparent, filterable, composite-ranked screener with liquidity flags | 7 |
 | `atlas/portfolio.py` | Pure-Python optimizer (equal-weight / inverse-vol / min-variance / max-Sharpe), correlation, beta, stress test | 11 |
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
@@ -199,7 +200,7 @@ free tier also serves company fundamentals (`OVERVIEW`) and news sentiment
 ~25/day cap):
 
 ```bash
-python -m atlas.cli analyze MSFT --alpha-vantage --fundamentals --sentiment
+python -m atlas.cli analyze MSFT --alpha-vantage --fundamentals --sentiment --events
 ```
 
 The `fundamental` sub-score blends profit margin, ROE, revenue/earnings growth,
@@ -207,6 +208,12 @@ P/E, and PEG (each scored 0–100, averaged over those present, with attribution
 The `sentiment` sub-score aggregates recent articles' ticker-specific sentiment,
 relevance-weighted. Both stay `null` — never fabricated — when the data is
 absent, and the `notes` field says why.
+
+**Event risk** (`--events`). Checks Alpha Vantage's `EARNINGS_CALENDAR` and
+populates the `events` field with the next report's date, days-away, and a risk
+level (high ≤7d, medium ≤21d). Per the spec, imminent earnings should defer or
+shrink a trade — so `analyze` adds a warning note and `signal --events` refuses
+to wave through a plan into an earnings print without flagging it.
 
 **Stooq (`--stooq`).** Was free and no-key, but Stooq has since put a JavaScript
 bot-verification wall in front of its CSV endpoint, so a plain HTTP client can no

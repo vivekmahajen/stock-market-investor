@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 from . import indicators as ind
 from . import scoring
+from .events import build_event_risk, event_risk_note
 from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .fibonacci import auto_fibonacci
@@ -77,6 +78,7 @@ def analyze(
     benchmark: Optional[str] = None,
     with_fundamentals: bool = False,
     with_sentiment: bool = False,
+    with_events: bool = False,
 ) -> dict:
     """Full workup for ``analyze <symbol>`` producing the Section 15 envelope.
 
@@ -147,6 +149,23 @@ def analyze(
     else:
         notes.append("sentiment is null: pass with_sentiment=True (a news feed) to compute it.")
 
+    events = []
+    if with_events:
+        er = registry.get_earnings_calendar(symbol)
+        if "error" in er:
+            notes.append(f"events unchecked: {er['error']}.")
+        else:
+            asof_date = series.asof.date() if series.asof else None
+            if asof_date:
+                events = build_event_risk(er["earnings"], asof_date)
+                warn = event_risk_note(events)
+                if warn:
+                    notes.append(warn)
+                elif not events:
+                    notes.append("No earnings within the event-risk window.")
+    else:
+        notes.append("events unchecked: pass with_events=True to check the earnings calendar before acting.")
+
     subscores = {
         "technical": tech,
         "fundamental": fund,
@@ -190,7 +209,7 @@ def analyze(
         "patterns": patterns,
         "fundamentals_detail": fundamentals_detail,
         "sentiment_detail": sentiment_detail,
-        "events": [],  # no calendar feed in this build; must be checked before a live signal
+        "events": events,
         "notes": notes,
         "data_provenance": prov,
         "data_is_simulated": simulated,
@@ -230,7 +249,8 @@ def build_signal(
     if r1 is not None and r1 < 1.5:
         warnings.append(f"R:R to first target is {r1:.2f} (< 1.5) — setup rejected by default threshold.")
     if events:
-        warnings.append("Event risk present before/within horizon — see events; consider deferring.")
+        note = event_risk_note(events)
+        warnings.append(note or "Event risk present before/within horizon — see events; consider deferring.")
     return {
         "symbol": symbol,
         "direction": direction,

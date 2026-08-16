@@ -167,6 +167,15 @@ class ToolRegistry:
             return {"error": f"get_news_sentiment failed: {e}"}
         return {"news": news, "provenance": self.provider.provenance("get_news_sentiment", symbol, None, None).to_dict()}
 
+    def get_earnings_calendar(self, symbol: str, horizon: str = "3month") -> dict:
+        if not hasattr(self.provider, "get_earnings_calendar"):
+            return {"error": f"provider '{getattr(self.provider, 'source', '?')}' has no earnings calendar"}
+        try:
+            rows = self.provider.get_earnings_calendar(symbol, horizon)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"get_earnings_calendar failed: {e}"}
+        return {"earnings": rows, "provenance": self.provider.provenance("get_earnings_calendar", symbol, None, None).to_dict()}
+
     def create_alert(self, symbol: str, condition: dict, channel: str = "log", note: str = "") -> dict:
         try:
             alert = self.alerts.create_alert(symbol, condition, channel, note)
