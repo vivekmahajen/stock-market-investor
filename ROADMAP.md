@@ -82,13 +82,15 @@ Built: entry/stop/targets/R/position-size, sub-threshold-R rejection, event atta
 - [ ] D5. `catalyst_or_expiry` tied to the event calendar
 - [ ] D6. `propose_signal(symbol)` — auto-derive entry/stop (structure) + targets (levels/fib) from analysis
 
-## E. Backtesting robustness (§8) — `atlas/backtest.py`
+## E. Backtesting robustness (§8) — `atlas/robustness.py` ✅ DONE
 Built: next-bar-open engine, costs/slippage, full metrics, small-sample verdict.
 
-- [ ] E1. `train_test_split` — in-sample vs out-of-sample, reported separately
-- [ ] E2. `walk_forward` — rolling-window walk-forward analysis
-- [ ] E3. `parameter_sensitivity` — grid over params, report stability/curve-fitting risk
-- [ ] E4. `sub_period_analysis` — performance across sub-periods / regimes
+- [x] E1. `train_test_split` — in-sample vs out-of-sample, reported separately
+- [x] E2. `walk_forward` — anchored walk-forward with per-fold optimization + param stability
+- [x] E3. `parameter_sensitivity` — grid over params, coef-of-variation curve-fitting verdict
+- [x] E4. `sub_period_analysis` — performance/consistency across contiguous sub-periods
+
+CLI: `backtest --robustness {split|walkforward|sensitivity|subperiods}`.
 
 ## F. Portfolio depth (§11) — `atlas/portfolio.py`
 Built: optimizer (equal/inv-vol/min-var/max-sharpe), correlation, beta, stress test.

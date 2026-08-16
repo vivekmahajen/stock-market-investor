@@ -91,6 +91,21 @@ class OHLCV:
             volume=list(self.volume[s:]),
         )
 
+    def slice(self, start: int, end: int) -> "OHLCV":
+        """A contiguous sub-series over the half-open index range [start, end)."""
+        start = max(0, start)
+        end = min(len(self), end)
+        return OHLCV(
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            ts=list(self.ts[start:end]),
+            open=list(self.open[start:end]),
+            high=list(self.high[start:end]),
+            low=list(self.low[start:end]),
+            close=list(self.close[start:end]),
+            volume=list(self.volume[start:end]),
+        )
+
     @property
     def asof(self) -> Optional[datetime]:
         return self.ts[-1] if self.ts else None

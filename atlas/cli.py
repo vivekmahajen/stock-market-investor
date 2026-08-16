@@ -91,6 +91,9 @@ def main(argv=None) -> int:
     pb.add_argument("--lookback", type=int, default=750)
     pb.add_argument("--fast", type=int, default=20)
     pb.add_argument("--slow", type=int, default=50)
+    pb.add_argument("--robustness", default="none",
+                    choices=["none", "split", "walkforward", "sensitivity", "subperiods"],
+                    help="robustness check to run instead of a single backtest (§8)")
 
     pc = sub.add_parser("screen", parents=[common], help="screen a universe (transparent criteria)")
     pc.add_argument("symbols", help="comma-separated symbols")
@@ -152,9 +155,23 @@ def main(argv=None) -> int:
             print(json.dumps(fetched, indent=2))
             return 1
         series = fetched["_series"]
-        res = run_backtest(series, _ema_cross_signal(args.fast, args.slow))
-        out = res.to_dict()
-        out["verdict"] = verdict(res.metrics, len(res.trades))
+        if args.robustness == "none":
+            res = run_backtest(series, _ema_cross_signal(args.fast, args.slow))
+            out = res.to_dict()
+            out["verdict"] = verdict(res.metrics, len(res.trades))
+        else:
+            from .robustness import (parameter_sensitivity, sub_period_analysis,
+                                     train_test_split, walk_forward)
+            factory = lambda p: _ema_cross_signal(p["fast"], p["slow"])
+            grid = {"fast": [10, 20, 30], "slow": [50, 100, 200]}
+            if args.robustness == "split":
+                out = train_test_split(series, _ema_cross_signal(args.fast, args.slow))
+            elif args.robustness == "walkforward":
+                out = walk_forward(series, factory, grid)
+            elif args.robustness == "sensitivity":
+                out = parameter_sensitivity(series, factory, grid)
+            else:  # subperiods
+                out = sub_period_analysis(series, _ema_cross_signal(args.fast, args.slow))
         out["data_is_simulated"] = fetched["provenance"].get("simulated", False)
     elif args.cmd == "screen":
         symbols = [s.strip() for s in args.symbols.split(",")]
