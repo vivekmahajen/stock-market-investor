@@ -111,6 +111,8 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/scoring.py` | Explainable 0–100 ATLAS Score with attribution | 10 |
 | `atlas/fundamentals.py` | Fundamental & news-sentiment sub-scores from a data feed, with factor attribution | 10, 12 |
 | `atlas/events.py` | Earnings-calendar event risk: days-to-report, risk level, defer/size-down warning | 2, 6, 12 |
+| `atlas/options.py` | Black-Scholes price, full greeks (delta/gamma/theta/vega/rho), implied-vol solver | 3 |
+| `atlas/report.py` | Human-readable text rendering of analyze / signal / backtest / option outputs | 15 |
 | `atlas/screen.py` | Transparent, filterable, composite-ranked screener with liquidity flags | 7 |
 | `atlas/portfolio.py` | Pure-Python optimizer (equal-weight / inverse-vol / min-variance / max-Sharpe), correlation, beta, stress test | 11 |
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
@@ -147,6 +149,13 @@ python -m atlas.cli signal AAPL --entry 100 --stop 95 --targets 110,120
 
 # An EMA-cross backtest (note the small-sample noise warning)
 python -m atlas.cli backtest AAPL --fast 20 --slow 50
+
+# Option price + greeks (Black-Scholes); or imply vol from a market price
+python -m atlas.cli option --spot 495 --strike 500 --dte 30 --vol 0.25 --kind call
+python -m atlas.cli option --spot 100 --strike 100 --dte 90 --price 5.5 --kind call
+
+# Human-readable text instead of JSON (works on any command)
+python -m atlas.cli analyze AAPL --format text
 
 # Screen a universe with transparent criteria
 python -m atlas.cli screen AAPL,MSFT,NVDA,AMD --above-ema50 --limit 5

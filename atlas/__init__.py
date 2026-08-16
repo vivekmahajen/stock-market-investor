@@ -29,6 +29,7 @@ from .backtest import run_backtest, verdict
 from .calibration import CalibrationLog, SignalRecord
 from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
+from .options import bs_greeks, bs_price, implied_vol, option_analysis
 from .chart_patterns import detect_classical
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
@@ -67,6 +68,10 @@ __all__ = [
     "sentiment_subscore",
     "build_event_risk",
     "parse_earnings_csv",
+    "bs_price",
+    "bs_greeks",
+    "implied_vol",
+    "option_analysis",
     "Alert",
     "AlertStore",
     "CalibrationLog",

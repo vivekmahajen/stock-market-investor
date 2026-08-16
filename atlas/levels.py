@@ -80,6 +80,30 @@ def _cluster(prices, indices: List[int], tolerance_pct: float, kind: str) -> Lis
     return levels
 
 
+def classify_by_price(series: OHLCV, **kwargs) -> dict:
+    """Relabel detected pivots by position relative to the last close.
+
+    Detection labels levels by swing type (lows vs highs), which reads backwards
+    in a strong trend (old swing highs sit *below* price, recent swing lows sit
+    *above* it). Here every pivot below the last close is support and every pivot
+    above it is resistance — the intuitive view — nearest first, each with its
+    distance from price.
+    """
+    lv = detect_levels(series, **kwargs)
+    close = lv["last_close"]
+    if close is None:
+        return {"support": [], "resistance": [], "last_close": None}
+
+    def _tag(entry):
+        d = (entry["price"] - close) / close * 100.0
+        return {"price": entry["price"], "touches": entry["touches"], "distance_pct": round(d, 2)}
+
+    pivots = lv["support"] + lv["resistance"]
+    support = sorted((_tag(p) for p in pivots if p["price"] <= close), key=lambda x: -x["price"])
+    resistance = sorted((_tag(p) for p in pivots if p["price"] > close), key=lambda x: x["price"])
+    return {"support": support, "resistance": resistance, "last_close": close}
+
+
 def nearest_levels(series: OHLCV, **kwargs) -> dict:
     """Nearest support below and resistance above the last close."""
     lv = detect_levels(series, **kwargs)
