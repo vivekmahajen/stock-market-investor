@@ -241,26 +241,210 @@ def build_signal(
     risk_pct: float = 0.01,
     horizon: str = "swing (days-weeks)",
     events: Optional[List[dict]] = None,
+    thesis: Optional[str] = None,
+    confidence: Optional[float] = None,
+    confidence_drivers: Optional[List[str]] = None,
+    biggest_risk: Optional[str] = None,
+    invalidation: Optional[str] = None,
+    catalyst_or_expiry: Optional[str] = None,
+    regime: Optional[str] = None,
+    min_r: float = 1.5,
 ) -> dict:
-    """Assemble a fully risk-defined signal (Section 6). Rejects sub-threshold R."""
+    """Assemble a fully risk-defined signal (Section 6). Rejects sub-threshold R.
+
+    The narrative fields (thesis, confidence, biggest_risk, invalidation,
+    catalyst) are optional here and auto-filled by :func:`propose_signal`; when
+    omitted, ``invalidation`` is derived from the stop so a manual plan still
+    carries its "what would make me wrong".
+    """
     size = size_position(account_equity, entry, stop, direction, risk_pct)
     r1 = r_multiple(entry, stop, targets[0], direction) if targets else None
     warnings = list(size.warnings)
-    if r1 is not None and r1 < 1.5:
-        warnings.append(f"R:R to first target is {r1:.2f} (< 1.5) — setup rejected by default threshold.")
+    if r1 is not None and r1 < min_r:
+        warnings.append(f"R:R to first target is {r1:.2f} (< {min_r}) — setup rejected by default threshold.")
     if events:
         note = event_risk_note(events)
-        warnings.append(note or "Event risk present before/within horizon — see events; consider deferring.")
+        if note:
+            warnings.append(note)
+    if invalidation is None:
+        side = "below" if direction == "long" else "above"
+        invalidation = f"A decisive close {side} the stop at {stop} negates the {direction}."
     return {
         "symbol": symbol,
         "direction": direction,
+        "regime": regime,
+        "thesis": thesis,
         "entry": entry,
         "stop": stop,
         "targets": targets,
         "r_multiple": round(r1, 2) if r1 is not None else None,
         "position_size": size.to_dict(),
+        "confidence": confidence,
+        "confidence_drivers": confidence_drivers or [],
+        "confidence_basis": "model-derived (technical confluence, not yet a calibrated base rate)",
+        "biggest_risk": biggest_risk,
+        "what_would_make_me_wrong": invalidation,
         "horizon": horizon,
+        "catalyst_or_expiry": catalyst_or_expiry,
         "events": events or [],
         "warnings": warnings,
         "disclaimer": "Educational analysis, not financial advice. You decide; consider a licensed advisor.",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Auto-derived signal proposal (Section 6)
+# --------------------------------------------------------------------------- #
+def _last_atr(series: OHLCV, period: int = 14) -> Optional[float]:
+    for v in reversed(ind.atr(series, period)):
+        if v is not None:
+            return v
+    return None
+
+
+def _pattern_tally(series: OHLCV):
+    bull = bear = 0
+    groups = [latest_patterns(series, 5), detect_classical(series), detect_harmonics(series)]
+    for g in groups:
+        for p in g:
+            if p.get("direction") == "bullish":
+                bull += 1
+            elif p.get("direction") == "bearish":
+                bear += 1
+    return bull, bear
+
+
+def _decide_direction(regime, tech, conf_score, bull, bear) -> str:
+    if tech is None or conf_score is None:
+        return "flat"
+    if regime == "trending_up" and tech >= 55 and conf_score >= 55 and bull >= bear:
+        return "long"
+    if regime == "trending_down" and tech <= 45 and conf_score <= 45 and bear >= bull:
+        return "short"
+    return "flat"  # range / high-vol / conflicting -> no clean directional setup
+
+
+def _derive_stop_targets(direction, entry, levels, atrv, fib):
+    atrv = atrv or entry * 0.02
+    if direction == "long":
+        supports = [s["price"] for s in levels["support"] if s["price"] < entry]
+        stop = (supports[0] - 0.25 * atrv) if supports else (entry - 1.5 * atrv)
+        if stop >= entry:
+            stop = entry - 1.5 * atrv
+        risk = entry - stop
+        tgts = [r["price"] for r in levels["resistance"] if r["price"] > entry]
+        if fib and fib.get("extensions"):
+            tgts += [float(v) for v in fib["extensions"].values() if float(v) > entry]
+        while len(tgts) < 2:
+            tgts.append(entry + (len(tgts) + 2) * risk)
+        tgts = sorted({round(t, 4) for t in tgts})[:3]
+    else:
+        resist = [r["price"] for r in levels["resistance"] if r["price"] > entry]
+        stop = (resist[0] + 0.25 * atrv) if resist else (entry + 1.5 * atrv)
+        if stop <= entry:
+            stop = entry + 1.5 * atrv
+        risk = stop - entry
+        tgts = [s["price"] for s in levels["support"] if s["price"] < entry]
+        if fib and fib.get("extensions"):
+            tgts += [float(v) for v in fib["extensions"].values() if float(v) < entry]
+        while len(tgts) < 2:
+            tgts.append(entry - (len(tgts) + 2) * risk)
+        tgts = sorted({round(t, 4) for t in tgts}, reverse=True)[:3]
+    return round(stop, 4), tgts
+
+
+def _signal_confidence(conf_score, tech, bull, bear, direction, events):
+    total = bull + bear
+    align = 50.0
+    if total > 0:
+        net = (bull - bear) / total
+        align = 50.0 + (net if direction == "long" else -net) * 50.0
+    base = 0.4 * conf_score + 0.4 * tech + 0.2 * align
+    drivers = [f"confluence {conf_score:.0f}", f"technical {tech:.0f}", f"pattern alignment {align:.0f}"]
+    if events and events[0].get("risk") == "high":
+        base -= 15
+        drivers.append(f"-15 imminent earnings ({events[0]['days_away']}d)")
+    return max(0, min(100, round(base))), drivers
+
+
+def propose_signal(
+    symbol: str,
+    registry: Optional[ToolRegistry] = None,
+    series: Optional[OHLCV] = None,
+    account_equity: float = 100_000.0,
+    risk_pct: float = 0.01,
+    timeframe: str = "1d",
+    lookback: int = 300,
+    horizon: str = "swing (days-weeks)",
+    min_r: float = 1.5,
+    with_events: bool = False,
+) -> dict:
+    """Auto-derive a fully-specified signal from the analysis (Section 6).
+
+    Direction comes from regime + technical + confluence + pattern alignment;
+    stop and targets from structure/Fibonacci; confidence from the blend. Returns
+    a ``flat`` result (with a reason) when there is no clean setup — silence is a
+    valid answer per the spec.
+    """
+    registry = registry or ToolRegistry()
+    if series is None:
+        fetched = registry.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in fetched:
+            return {"symbol": symbol, "error": fetched["error"]}
+        series = fetched["_series"]
+
+    regime = classify_regime(series)
+    conf = confluence_score(series)
+    conf_score = conf.get("score")
+    tech = scoring.technical_subscore(series)
+    bull, bear = _pattern_tally(series)
+    direction = _decide_direction(regime, tech, conf_score, bull, bear)
+
+    events = []
+    if with_events and series.asof:
+        er = registry.get_earnings_calendar(symbol)
+        if "earnings" in er:
+            events = build_event_risk(er["earnings"], series.asof.date())
+
+    if direction == "flat":
+        return {
+            "symbol": symbol,
+            "direction": "flat",
+            "reason": f"No clean setup: regime={regime}, technical={tech}, confluence={conf_score}, "
+                      f"patterns bull/bear={bull}/{bear}. Silence is a valid output.",
+            "regime": regime,
+            "events": events,
+            "disclaimer": "Educational analysis, not financial advice.",
+        }
+
+    entry = round(series.close[-1], 4)
+    atrv = _last_atr(series)
+    levels = classify_by_price(series)
+    fib = auto_fibonacci(series)
+    stop, targets = _derive_stop_targets(direction, entry, levels, atrv, fib)
+    confidence, drivers = _signal_confidence(conf_score, tech, bull, bear, direction, events)
+
+    side = "Long" if direction == "long" else "Short"
+    pat = "bullish" if bull > bear else "bearish" if bear > bull else "mixed"
+    thesis = (f"{side} {symbol}: {regime} regime, technical {tech:.0f}/100 and confluence "
+              f"{conf_score:.0f}/100, {pat} pattern read; entry near {entry} against structure.")
+
+    if events and events[0].get("risk") in ("high", "medium"):
+        biggest_risk = f"earnings on {events[0]['date']} ({events[0]['days_away']}d) can gap through the stop"
+    elif tech < 65:
+        biggest_risk = "momentum is only partially confirmed; a stall would invalidate the thesis"
+    else:
+        biggest_risk = f"a regime flip out of the current {regime}"
+
+    side_word = "below" if direction == "long" else "above"
+    invalidation = (f"A decisive daily close {side_word} the stop at {stop} negates the {direction}; "
+                    f"an earlier warning is price losing the {regime} structure.")
+    catalyst = (f"invalid after earnings on {events[0]['date']}" if events
+                else f"thesis expires at the end of the {horizon} window")
+
+    return build_signal(
+        symbol, entry, stop, targets, direction, account_equity, risk_pct, horizon, events,
+        thesis=thesis, confidence=confidence, confidence_drivers=drivers,
+        biggest_risk=biggest_risk, invalidation=invalidation,
+        catalyst_or_expiry=catalyst, regime=regime, min_r=min_r,
+    )

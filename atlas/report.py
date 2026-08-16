@@ -106,15 +106,37 @@ def format_analysis(out: dict) -> str:
 
 
 def format_signal(out: dict) -> str:
+    if out.get("error"):
+        return f"SIGNAL ERROR for {out.get('symbol','?')}: {out['error']}"
     L: List[str] = []
+    if out.get("direction") == "flat":
+        L.append(_hr("="))
+        L.append(f"  {out['symbol']}  —  NO SETUP (flat)")
+        L.append(_hr("="))
+        L.append(f"  {out.get('reason','')}")
+        L.append("")
+        L.append(out.get("disclaimer", ""))
+        return "\n".join(L)
     L.append(_hr("="))
-    L.append(f"  SIGNAL  {out['symbol']}  {out['direction'].upper()}")
+    conf = out.get("confidence")
+    L.append(f"  SIGNAL  {out['symbol']}  {out['direction'].upper()}"
+             + (f"   confidence {conf}" if conf is not None else ""))
     L.append(_hr("="))
+    if out.get("thesis"):
+        L.append(f"  {out['thesis']}")
     L.append(f"  entry {out['entry']}   stop {out['stop']}   targets {out.get('targets')}")
     L.append(f"  R:R (T1) {out.get('r_multiple')}   horizon: {out.get('horizon')}")
     ps = out.get("position_size", {})
     L.append(f"  size: {ps.get('units')} units   risk {ps.get('risk_pct')}   "
              f"worst-case loss {ps.get('worst_case_loss')}")
+    if out.get("confidence_drivers"):
+        L.append(f"  drivers: {', '.join(out['confidence_drivers'])}")
+    if out.get("biggest_risk"):
+        L.append(f"  biggest risk: {out['biggest_risk']}")
+    if out.get("what_would_make_me_wrong"):
+        L.append(f"  invalidation: {out['what_would_make_me_wrong']}")
+    if out.get("catalyst_or_expiry"):
+        L.append(f"  catalyst/expiry: {out['catalyst_or_expiry']}")
     if out.get("events"):
         L.append("  events:")
         for e in out["events"]:
