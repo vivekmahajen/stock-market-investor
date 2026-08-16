@@ -92,10 +92,27 @@ def analyze(
     tech = scoring.technical_subscore(series)
 
     rs = None
+    notes = []
     if benchmark:
         bench = registry.get_ohlcv(benchmark, timeframe, lookback)
         if "_series" in bench:
             rs = scoring.relative_strength_subscore(series, bench["_series"])
+            if rs is None:
+                notes.append(
+                    f"relative_strength is null: not enough overlapping history between "
+                    f"{symbol} and benchmark {benchmark} (need >63 common bars)."
+                )
+        else:
+            notes.append(
+                f"relative_strength is null: benchmark '{benchmark}' could not be loaded "
+                f"({bench.get('error', 'unknown error')})."
+            )
+    else:
+        notes.append(
+            "relative_strength is null: no benchmark given. Pass benchmark=<symbol> "
+            "(and provide that symbol's data) to compute relative strength."
+        )
+    notes.append("fundamental & sentiment sub-scores are null: no fundamentals/news feed wired in.")
 
     subscores = {
         "technical": tech,
@@ -139,6 +156,7 @@ def analyze(
         "fibonacci": fib,
         "patterns": patterns,
         "events": [],  # no calendar feed in this build; must be checked before a live signal
+        "notes": notes,
         "data_provenance": prov,
         "data_is_simulated": simulated,
         "disclaimer": "Educational analysis, not financial advice.",
