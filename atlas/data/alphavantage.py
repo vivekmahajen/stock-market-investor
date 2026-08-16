@@ -22,6 +22,7 @@ import io
 import json
 import os
 import ssl
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -75,14 +76,28 @@ class AlphaVantageProvider:
         fetch: Optional[FetchFn] = None,
         timeout: float = 30.0,
         premium: bool = False,
+        min_interval: float = 1.2,
     ):
         self.api_key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY")
         self.timeout = timeout
         # outputsize=full is a premium-only feature on Alpha Vantage; the free
         # tier is limited to 'compact' (latest ~100 bars). Default to free.
         self.premium = premium
+        # Free tier caps bursts at ~1 request/second; space real calls out so a
+        # multi-call analyze (prices + fundamentals + news) doesn't self-throttle.
+        self.min_interval = 0.0 if premium else min_interval
+        self._last_call = 0.0
         self._injected = fetch is not None
         self._fetch = fetch or (lambda url: _http_get(url, self.timeout))
+
+    def _do_fetch(self, url: str) -> str:
+        """Fetch with per-second rate limiting (skipped for injected test fetchers)."""
+        if not self._injected and self.min_interval > 0:
+            elapsed = time.time() - self._last_call
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self._last_call = time.time()
+        return self._fetch(url)
 
     def _require_key(self) -> None:
         if not self._injected and not self.api_key:
@@ -149,7 +164,7 @@ class AlphaVantageProvider:
     # --- DataProvider interface -----------------------------------------
     def get_ohlcv(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> OHLCV:
         self._require_key()
-        text = self._fetch(self._url(symbol, timeframe, lookback))
+        text = self._do_fetch(self._url(symbol, timeframe, lookback))
         series = self.parse_csv(text, symbol, timeframe)
         return series.tail(lookback) if lookback else series
 
@@ -157,7 +172,7 @@ class AlphaVantageProvider:
         self._require_key()
         params = {"function": "GLOBAL_QUOTE", "symbol": symbol.upper(),
                   "apikey": self.api_key or "demo", "datatype": "csv"}
-        text = self._fetch(f"{_BASE}?{urllib.parse.urlencode(params)}")
+        text = self._do_fetch(f"{_BASE}?{urllib.parse.urlencode(params)}")
         return self.parse_quote(text, symbol)
 
     def parse_quote(self, text: str, symbol: str) -> Quote:
@@ -199,7 +214,7 @@ class AlphaVantageProvider:
         return self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
 
     def _json(self, url: str, symbol: str) -> dict:
-        text = self._fetch(url)
+        text = self._do_fetch(url)
         try:
             obj = json.loads(text)
         except json.JSONDecodeError:
