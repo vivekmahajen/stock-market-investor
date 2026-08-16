@@ -27,6 +27,7 @@ from .alerts import Alert, AlertStore
 from .analysis import analyze, build_signal, classify_regime, confluence_score
 from .backtest import run_backtest, verdict
 from .calibration import CalibrationLog, SignalRecord
+from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
@@ -61,6 +62,8 @@ __all__ = [
     "verdict",
     "run_screen",
     "optimize_portfolio",
+    "fundamental_subscore",
+    "sentiment_subscore",
     "Alert",
     "AlertStore",
     "CalibrationLog",

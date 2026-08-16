@@ -65,6 +65,10 @@ def main(argv=None) -> int:
     pa.add_argument("--timeframe", default="1d")
     pa.add_argument("--lookback", type=int, default=300)
     pa.add_argument("--benchmark", default=None)
+    pa.add_argument("--fundamentals", action="store_true",
+                    help="fetch fundamentals to score the fundamental factor (extra API call)")
+    pa.add_argument("--sentiment", action="store_true",
+                    help="fetch news to score the sentiment factor (extra API call)")
 
     ps = sub.add_parser("signal", parents=[common], help="risk-defined trade plan")
     ps.add_argument("symbol")
@@ -99,7 +103,8 @@ def main(argv=None) -> int:
 
     if args.cmd == "analyze":
         out = analyze(args.symbol, registry=reg, timeframe=args.timeframe,
-                      lookback=args.lookback, benchmark=args.benchmark)
+                      lookback=args.lookback, benchmark=args.benchmark,
+                      with_fundamentals=args.fundamentals, with_sentiment=args.sentiment)
     elif args.cmd == "signal":
         targets = [float(x) for x in args.targets.split(",")]
         out = build_signal(args.symbol, args.entry, args.stop, targets, args.direction,

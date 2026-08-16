@@ -179,6 +179,37 @@ class AlphaVantageProvider:
             volume=float(r.get("volume") or 0.0),
         )
 
+    # --- fundamentals & sentiment (JSON endpoints) ----------------------
+    def get_fundamentals(self, symbol: str) -> dict:
+        """Company OVERVIEW (valuation, margins, growth). Returns the raw object."""
+        self._require_key()
+        params = {"function": "OVERVIEW", "symbol": symbol.upper(), "apikey": self.api_key or "demo"}
+        obj = self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
+        if not obj or "Symbol" not in obj:
+            raise RuntimeError(f"No fundamentals returned for '{symbol}' (unknown symbol or empty overview).")
+        return obj
+
+    def get_news_sentiment(self, symbol: str, window: int = 50) -> dict:
+        """NEWS_SENTIMENT feed for a ticker (latest first). Returns the raw object."""
+        self._require_key()
+        params = {
+            "function": "NEWS_SENTIMENT", "tickers": symbol.upper(),
+            "apikey": self.api_key or "demo", "sort": "LATEST", "limit": max(1, min(window, 1000)),
+        }
+        return self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
+
+    def _json(self, url: str, symbol: str) -> dict:
+        text = self._fetch(url)
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Alpha Vantage returned non-JSON for '{symbol}': {text[:120]!r}")
+        if isinstance(obj, dict):
+            for key in ("Error Message", "Note", "Information"):
+                if key in obj:
+                    raise RuntimeError(_explain_json(text, symbol))
+        return obj
+
     def provenance(self, tool: str, symbol: str, timeframe: Optional[str], lookback: Optional[str]) -> Provenance:
         return Provenance(
             tool=tool, symbol=symbol, timeframe=timeframe, lookback=lookback,

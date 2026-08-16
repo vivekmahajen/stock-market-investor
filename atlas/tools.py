@@ -149,6 +149,24 @@ class ToolRegistry:
         out["simulated"] = getattr(self.provider, "simulated", False)
         return out
 
+    def get_fundamentals(self, symbol: str) -> dict:
+        if not hasattr(self.provider, "get_fundamentals"):
+            return {"error": f"provider '{getattr(self.provider, 'source', '?')}' has no fundamentals feed"}
+        try:
+            overview = self.provider.get_fundamentals(symbol)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"get_fundamentals failed: {e}"}
+        return {"overview": overview, "provenance": self.provider.provenance("get_fundamentals", symbol, None, None).to_dict()}
+
+    def get_news_sentiment(self, symbol: str, window: int = 50) -> dict:
+        if not hasattr(self.provider, "get_news_sentiment"):
+            return {"error": f"provider '{getattr(self.provider, 'source', '?')}' has no news feed"}
+        try:
+            news = self.provider.get_news_sentiment(symbol, window)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"get_news_sentiment failed: {e}"}
+        return {"news": news, "provenance": self.provider.provenance("get_news_sentiment", symbol, None, None).to_dict()}
+
     def create_alert(self, symbol: str, condition: dict, channel: str = "log", note: str = "") -> dict:
         try:
             alert = self.alerts.create_alert(symbol, condition, channel, note)
