@@ -93,9 +93,17 @@ class StooqProvider:
         """
         import csv as _csv
 
+        lower = text.lower()
         head = text.lstrip()[:64].lower()
-        if "exceeded" in text.lower():
+        if "exceeded" in lower:
             raise RuntimeError("Stooq rate limit hit ('exceeded the daily hits limit'). Try later.")
+        if "requires javascript" in lower or ("noindex,nofollow" in lower and "<html" in head):
+            raise RuntimeError(
+                f"Stooq served a JavaScript bot-verification page for '{symbol}' instead of "
+                "CSV — its free download endpoint is now behind an anti-bot wall that a plain "
+                "HTTP client cannot pass. Use a keyed provider (e.g. AlphaVantageProvider) or "
+                "--csv with a browser-downloaded file."
+            )
         if not head.startswith("date,"):
             raise RuntimeError(f"Unexpected Stooq response for '{symbol}': {text[:80]!r}")
 
