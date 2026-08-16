@@ -22,7 +22,10 @@ from .tools import ToolRegistry
 
 def _registry(args) -> ToolRegistry:
     if getattr(args, "alpha_vantage", False):
-        return ToolRegistry(AlphaVantageProvider(api_key=getattr(args, "api_key", None)))
+        return ToolRegistry(AlphaVantageProvider(
+            api_key=getattr(args, "api_key", None),
+            premium=getattr(args, "premium", False),
+        ))
     if getattr(args, "stooq", False):
         return ToolRegistry(StooqProvider())
     if getattr(args, "csv", None):
@@ -52,6 +55,8 @@ def main(argv=None) -> int:
                         help="use Alpha Vantage (needs a free API key)")
     common.add_argument("--api-key", default=None,
                         help="Alpha Vantage API key (else ALPHAVANTAGE_API_KEY env var)")
+    common.add_argument("--premium", action="store_true",
+                        help="Alpha Vantage premium key (enables full-history outputsize)")
     common.add_argument("--seed", type=int, default=42, help="synthetic-feed seed")
     sub = p.add_subparsers(dest="cmd", required=True)
 

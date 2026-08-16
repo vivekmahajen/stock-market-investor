@@ -179,8 +179,15 @@ report = analyze("AAPL", registry=ToolRegistry(AlphaVantageProvider(api_key="YOU
 
 **Alpha Vantage.** Get a free key (instant, no card) at
 <https://www.alphavantage.co/support/#api-key>. Supports daily / weekly / monthly
-and intraday (`1m`–`1h`). The free tier is limited (~25 requests/day), so it
-suits single-symbol lookups more than wide screens or multi-symbol portfolios.
+and intraday (`1m`–`1h`). Two free-tier limits to know:
+- **~25 requests/day** — suits single-symbol lookups (`analyze`, `signal`,
+  `score`) more than wide screens or multi-symbol portfolios (one request per
+  symbol).
+- **Daily history is capped at ~100 bars** on the free tier (`outputsize=full`
+  is premium-only). That's ample for the indicators, patterns, and regime logic;
+  only very long lookbacks (e.g. EMA200) are affected. Pass `--premium` (or
+  `AlphaVantageProvider(premium=True)`) with a premium key to unlock full history.
+
 Alpha Vantage returns JSON on errors/rate-limits even in CSV mode — the provider
 detects those and raises a clear message instead of mis-parsing.
 

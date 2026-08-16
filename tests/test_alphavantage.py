@@ -50,8 +50,17 @@ def test_url_has_function_and_key():
     assert "outputsize=compact" in url  # lookback <= 100
 
 
-def test_url_full_outputsize_for_large_lookback():
-    p, calls = _provider(_DAILY_CSV)
+def test_free_tier_never_requests_full():
+    # outputsize=full is premium-only; free tier must stay compact even for big lookbacks.
+    p, calls = _provider(_DAILY_CSV)  # premium defaults to False
+    p.get_ohlcv("AAPL", "1d", 500)
+    assert "outputsize=compact" in calls["urls"][0]
+    assert "outputsize=full" not in calls["urls"][0]
+
+
+def test_premium_uses_full_for_large_lookback():
+    calls = {"urls": []}
+    p = AlphaVantageProvider(api_key="K", premium=True, fetch=lambda u: (calls["urls"].append(u) or _DAILY_CSV))
     p.get_ohlcv("AAPL", "1d", 500)
     assert "outputsize=full" in calls["urls"][0]
 

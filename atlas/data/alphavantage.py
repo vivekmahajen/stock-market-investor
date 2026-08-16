@@ -74,9 +74,13 @@ class AlphaVantageProvider:
         api_key: Optional[str] = None,
         fetch: Optional[FetchFn] = None,
         timeout: float = 30.0,
+        premium: bool = False,
     ):
         self.api_key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY")
         self.timeout = timeout
+        # outputsize=full is a premium-only feature on Alpha Vantage; the free
+        # tier is limited to 'compact' (latest ~100 bars). Default to free.
+        self.premium = premium
         self._injected = fetch is not None
         self._fetch = fetch or (lambda url: _http_get(url, self.timeout))
 
@@ -90,14 +94,15 @@ class AlphaVantageProvider:
 
     def _url(self, symbol: str, timeframe: str, lookback: int) -> str:
         params = {"symbol": symbol.upper(), "apikey": self.api_key or "demo", "datatype": "csv"}
+        want_full = self.premium and lookback > 100  # 'full' is premium-only
         if timeframe in _INTRADAY:
             params["function"] = "TIME_SERIES_INTRADAY"
             params["interval"] = _INTRADAY[timeframe]
-            params["outputsize"] = "full" if lookback > 100 else "compact"
+            params["outputsize"] = "full" if want_full else "compact"
         elif timeframe in _SERIES_FUNC:
             params["function"] = _SERIES_FUNC[timeframe]
             if timeframe == "1d":
-                params["outputsize"] = "full" if lookback > 100 else "compact"
+                params["outputsize"] = "full" if want_full else "compact"
         else:
             raise ValueError(
                 f"Unsupported timeframe '{timeframe}'. Use one of "
