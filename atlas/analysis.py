@@ -16,7 +16,9 @@ from .fundamentals import fundamental_subscore, sentiment_subscore
 from .chart_patterns import detect_classical
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
-from .levels import classify_by_price, nearest_levels
+from .levels import (classify_by_price, detect_channels, detect_gaps,
+                     detect_trendlines, nearest_levels, pivot_points,
+                     volume_profile_levels)
 from .patterns import latest_patterns
 from .risk import r_multiple, size_position
 from .tools import ToolRegistry
@@ -177,6 +179,13 @@ def analyze(
 
     levels = classify_by_price(series)
     near = nearest_levels(series)
+    structure = {
+        "trendlines": detect_trendlines(series),
+        "channel": detect_channels(series),
+        "pivots": pivot_points(series),
+        "open_gaps": [g for g in detect_gaps(series) if not g["filled"]][-5:],
+        "volume_profile": volume_profile_levels(series),
+    }
     patterns = {
         "candlestick": latest_patterns(series, lookback=5),
         "classical": detect_classical(series),
@@ -206,6 +215,7 @@ def analyze(
             "last_close": levels["last_close"],
         },
         "fibonacci": fib,
+        "structure": structure,
         "patterns": patterns,
         "fundamentals_detail": fundamentals_detail,
         "sentiment_detail": sentiment_detail,
