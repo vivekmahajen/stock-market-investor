@@ -146,5 +146,35 @@ def detect_harmonics(series: OHLCV, left: int = 2, right: int = 2) -> List[dict]
             "completion_pct": 100.0,  # D has formed as a pivot
             "base_rate": None,        # no historical study wired in — not fabricated
         })
+    # Cypher: uses XC (not BC) extension and D as a 0.786 retracement of XC.
+    xc = abs(C.price - X.price)
+    cypher = _score_cypher(ab_xa, xc / xa if xa else 0.0, abs(D.price - C.price) / xc if xc else 0.0)
+    if cypher is not None:
+        prz_width = 0.02 * xa
+        t1 = D.price + (0.382 * ad if direction == "bullish" else -0.382 * ad)
+        t2 = D.price + (0.618 * ad if direction == "bullish" else -0.618 * ad)
+        results.append({
+            "name": "cypher", "type": "harmonic", "direction": direction,
+            "confidence": round(cypher, 3),
+            "points": {k: [getattr(pt, "index"), round(pt.price, 4)]
+                       for k, pt in (("X", X), ("A", A), ("B", B), ("C", C), ("D", D))},
+            "ratios": {"AB/XA": round(ab_xa, 3), "XC/XA": round(xc / xa, 3) if xa else None,
+                       "DC/XC": round(abs(D.price - C.price) / xc, 3) if xc else None},
+            "prz": [round(D.price - prz_width, 4), round(D.price + prz_width, 4)],
+            "targets": [round(t1, 4), round(t2, 4)],
+            "invalidation": round(X.price, 4),
+            "completion_pct": 100.0, "base_rate": None,
+        })
+
     results.sort(key=lambda r: r["confidence"], reverse=True)
     return results
+
+
+def _score_cypher(ab_xa: float, xc_xa: float, dc_xc: float) -> Optional[float]:
+    """Cypher fit: AB 0.382-0.618 XA, C 1.13-1.414 XA extension, D 0.786 of XC."""
+    p1 = _match_range(ab_xa, (0.382, 0.618))
+    p2 = _match_range(xc_xa, (1.13, 1.414))
+    p3 = _match_point(dc_xc, 0.786, tol=0.06)
+    if p1 is None or p2 is None or p3 is None:
+        return None
+    return (p1 + p2 + p3) / 3.0
