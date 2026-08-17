@@ -237,6 +237,43 @@ def _diagnostics(symbols, w, cov, series_by_symbol, benchmark, sectors, rets) ->
     }
 
 
+def rebalance_plan(current: Dict[str, float], target: Dict[str, float],
+                   drift_band: float = 0.05, capital: Optional[float] = None) -> dict:
+    """Compare current weights to target and produce the trades to close the gap.
+
+    ``current`` and ``target`` are symbol -> weight maps. A position only trades
+    when its drift exceeds ``drift_band`` (turnover control). If ``capital`` is
+    given, per-trade currency amounts are included.
+    """
+    symbols = sorted(set(current) | set(target))
+    trades = []
+    turnover = 0.0
+    for s in symbols:
+        cw = current.get(s, 0.0)
+        tw = target.get(s, 0.0)
+        drift = tw - cw
+        if abs(drift) < drift_band:
+            action = "hold"
+        else:
+            action = "buy" if drift > 0 else "trim" if cw > 0 else "buy"
+            if tw == 0.0:
+                action = "exit"
+            turnover += abs(drift)
+        row = {"symbol": s, "current_weight": round(cw, 4), "target_weight": round(tw, 4),
+               "drift": round(drift, 4), "action": action}
+        if capital is not None:
+            row["amount"] = round(drift * capital, 2)
+        trades.append(row)
+    actionable = [t for t in trades if t["action"] != "hold"]
+    return {
+        "trades": trades,
+        "turnover": round(turnover, 4),
+        "needs_rebalance": bool(actionable),
+        "drift_band": drift_band,
+        "note": ("Positions within the drift band are left alone to limit turnover/costs."),
+    }
+
+
 def _beta(port: List[float], bench: List[float]) -> Optional[float]:
     n = len(port)
     if n < 2:

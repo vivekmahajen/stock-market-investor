@@ -114,6 +114,48 @@ def main(argv=None) -> int:
     pw.add_argument("--host", default="127.0.0.1")
     pw.add_argument("--port", type=int, default=8787)
 
+    psc = sub.add_parser("score", parents=[common], help="ATLAS Score only")
+    psc.add_argument("symbol")
+    psc.add_argument("--timeframe", default="1d")
+    psc.add_argument("--lookback", type=int, default=300)
+    psc.add_argument("--benchmark", default=None)
+    psc.add_argument("--fundamentals", action="store_true")
+    psc.add_argument("--sentiment", action="store_true")
+
+    pse = sub.add_parser("seasonality", parents=[common], help="calendar-bucketed return stats")
+    pse.add_argument("symbol")
+    pse.add_argument("--granularity", default="month", choices=["month", "weekday"])
+    pse.add_argument("--lookback", type=int, default=750)
+
+    pwt = sub.add_parser("watch", parents=[common], help="score a watchlist, ranked")
+    pwt.add_argument("symbols", help="comma-separated symbols")
+    pwt.add_argument("--timeframe", default="1d")
+    pwt.add_argument("--lookback", type=int, default=300)
+
+    pex = sub.add_parser("explain", parents=[common], help="full narrative workup + auto trade plan")
+    pex.add_argument("symbol")
+    pex.add_argument("--timeframe", default="1d")
+    pex.add_argument("--lookback", type=int, default=300)
+    pex.add_argument("--benchmark", default=None)
+
+    prb = sub.add_parser("rebalance", parents=[common], help="rebalancing plan vs current weights")
+    prb.add_argument("symbols", help="comma-separated symbols")
+    prb.add_argument("--current", required=True, help="comma-separated current weights (aligned to symbols)")
+    prb.add_argument("--objective", default="min_variance",
+                     choices=["equal_weight", "inverse_vol", "min_variance", "max_sharpe"])
+    prb.add_argument("--drift-band", type=float, default=0.05)
+    prb.add_argument("--capital", type=float, default=None)
+
+    pal = sub.add_parser("alert", parents=[common], help="create / list / check alerts")
+    pal.add_argument("action", choices=["add", "list", "check", "remove"])
+    pal.add_argument("symbol", nargs="?")
+    pal.add_argument("--kind", default="price_above")
+    pal.add_argument("--value", type=float, default=None)
+    pal.add_argument("--period", type=int, default=14)
+    pal.add_argument("--mult", type=float, default=1.0)
+    pal.add_argument("--id", dest="alert_id", default=None)
+    pal.add_argument("--store", default="atlas_alerts.json")
+
     po = sub.add_parser("option", parents=[common], help="Black-Scholes price + greeks (+ implied vol)")
     po.add_argument("--spot", type=float, required=True)
     po.add_argument("--strike", type=float, required=True)
@@ -191,6 +233,74 @@ def main(argv=None) -> int:
         symbols = [s.strip() for s in args.symbols.split(",")]
         out = reg.optimize_portfolio(symbols, objective=args.objective,
                                      max_weight=args.max_weight, benchmark=args.benchmark)
+    elif args.cmd == "score":
+        full = analyze(args.symbol, registry=reg, timeframe=args.timeframe, lookback=args.lookback,
+                       benchmark=args.benchmark, with_fundamentals=args.fundamentals,
+                       with_sentiment=args.sentiment)
+        if "error" in full:
+            out = full
+        else:
+            out = {k: full[k] for k in ("symbol", "atlas_score", "subscores", "score_label",
+                                        "score_horizon", "top_contributors", "regime", "notes",
+                                        "data_is_simulated", "disclaimer") if k in full}
+    elif args.cmd == "seasonality":
+        fetched = reg.get_ohlcv(args.symbol, "1d", args.lookback)
+        if "error" in fetched:
+            out = fetched
+        else:
+            out = reg.compute_seasonality(fetched["_series"], args.granularity)
+    elif args.cmd == "watch":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        results = []
+        for sym in symbols:
+            a = analyze(sym, registry=reg, timeframe=args.timeframe, lookback=args.lookback)
+            if "error" in a:
+                results.append({"symbol": sym, "error": a["error"]})
+            else:
+                results.append({"symbol": sym, "atlas_score": a["atlas_score"],
+                                "label": a["score_label"], "regime": a["regime"]})
+        results.sort(key=lambda r: r.get("atlas_score") or -1, reverse=True)
+        out = {"results": results, "count": len(results)}
+    elif args.cmd == "explain":
+        from .analysis import propose_signal
+        out = analyze(args.symbol, registry=reg, timeframe=args.timeframe,
+                      lookback=args.lookback, benchmark=args.benchmark)
+        if "error" not in out:
+            out["_signal"] = propose_signal(args.symbol, registry=reg, timeframe=args.timeframe,
+                                            lookback=args.lookback)
+    elif args.cmd == "rebalance":
+        from .portfolio import rebalance_plan
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        weights = [float(x) for x in args.current.split(",")]
+        if len(weights) != len(symbols):
+            out = {"error": "number of --current weights must match number of symbols"}
+        else:
+            opt = reg.optimize_portfolio(symbols, objective=args.objective)
+            if "error" in opt:
+                out = opt
+            else:
+                current = dict(zip(symbols, weights))
+                out = rebalance_plan(current, opt["weights"], drift_band=args.drift_band, capital=args.capital)
+                out["target_weights"] = opt["weights"]
+    elif args.cmd == "alert":
+        from .alerts import AlertStore
+        store = AlertStore(args.store)
+        reg.alerts = store
+        if args.action == "add":
+            cond = {"kind": args.kind}
+            if args.value is not None:
+                cond["value"] = args.value
+            if args.kind in ("rsi_above", "rsi_below", "cross_above_ema", "cross_below_ema", "atr_move"):
+                cond["period"] = args.period
+            if args.kind == "atr_move":
+                cond["mult"] = args.mult
+            out = reg.create_alert(args.symbol, cond)
+        elif args.action == "list":
+            out = {"alerts": [a.to_dict() for a in store.list_alerts()]}
+        elif args.action == "remove":
+            out = {"removed": store.remove(args.alert_id)}
+        else:  # check
+            out = {"triggered": reg.check_alerts()}
     elif args.cmd == "option":
         from .options import option_analysis
         out = option_analysis(args.spot, args.strike, args.dte / 365.0, args.rate,
