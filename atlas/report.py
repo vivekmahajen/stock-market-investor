@@ -194,6 +194,75 @@ def format_option(out: dict) -> str:
     return "\n".join(L)
 
 
+def format_score(out: dict) -> str:
+    if out.get("error"):
+        return f"SCORE ERROR for {out.get('symbol','?')}: {out['error']}"
+    subs = out.get("subscores", {})
+    L = [_hr("=")]
+    L.append(f"  {out['symbol']}  ATLAS {out.get('atlas_score')}  ({str(out.get('score_label','')).upper()})"
+             f"   horizon: {out.get('score_horizon','')}")
+    L.append(_hr("="))
+    for k in ("technical", "fundamental", "sentiment", "relative_strength", "risk"):
+        L.append(f"  {k:<18} {_bar(subs.get(k))}")
+    if out.get("top_contributors"):
+        L.append("  " + "; ".join(out["top_contributors"]))
+    return "\n".join(L)
+
+
+def format_watch(out: dict) -> str:
+    rows = out.get("results", [])
+    L = [_hr("="), f"  WATCHLIST — {len(rows)} symbols (ranked by ATLAS score)", _hr("=")]
+    L.append(f"  {'SYMBOL':<10}{'SCORE':>7}  {'LABEL':<12}{'REGIME':<16}")
+    for r in rows:
+        if r.get("error"):
+            L.append(f"  {r['symbol']:<10}{'ERR':>7}  {r['error'][:40]}")
+        else:
+            L.append(f"  {r['symbol']:<10}{r['atlas_score']:>7}  {str(r['label']):<12}{str(r['regime']):<16}")
+    return "\n".join(L)
+
+
+def format_seasonality(out: dict) -> str:
+    L = [_hr("="), f"  SEASONALITY ({out.get('granularity','?')})", _hr("=")]
+    L.append(f"  {'BUCKET':<8}{'MEAN%':>9}{'POS%':>8}{'N':>7}")
+    for b in out.get("buckets", []):
+        L.append(f"  {b['bucket']:<8}{b['mean_return_pct']:>9}{b['pct_positive']:>8}{b['samples']:>7}")
+    for w in out.get("warnings", []):
+        L.append(f"  ! {w}")
+    return "\n".join(L)
+
+
+def format_rebalance(out: dict) -> str:
+    if out.get("error"):
+        return f"REBALANCE ERROR: {out['error']}"
+    L = [_hr("="), f"  REBALANCE — turnover {out.get('turnover')}  "
+         f"({'action needed' if out.get('needs_rebalance') else 'within bands'})", _hr("=")]
+    L.append(f"  {'SYMBOL':<10}{'CUR':>8}{'TGT':>8}{'DRIFT':>8}  ACTION")
+    for t in out.get("trades", []):
+        amt = f"  ({t['amount']})" if "amount" in t else ""
+        L.append(f"  {t['symbol']:<10}{t['current_weight']:>8}{t['target_weight']:>8}{t['drift']:>8}  {t['action']}{amt}")
+    return "\n".join(L)
+
+
+def format_explain(out: dict) -> str:
+    """A fuller layered narrative (Section 15) built from the analyze envelope."""
+    if out.get("error"):
+        return f"EXPLAIN ERROR for {out.get('symbol','?')}: {out['error']}"
+    sig = out.get("_signal", {})
+    L = [format_analysis({k: v for k, v in out.items() if k != "_signal"})]
+    if sig and sig.get("direction") and sig.get("direction") != "flat":
+        L.append("")
+        L.append("THE TRADE (auto-proposed):")
+        L.append(f"  {sig['direction'].upper()} — {sig.get('thesis','')}")
+        L.append(f"  entry {sig['entry']} · stop {sig['stop']} · targets {sig.get('targets')} · "
+                 f"R:R {sig.get('r_multiple')} · confidence {sig.get('confidence')}")
+        L.append(f"  biggest risk: {sig.get('biggest_risk')}")
+        L.append(f"  invalidation: {sig.get('what_would_make_me_wrong')}")
+    elif sig:
+        L.append("")
+        L.append(f"THE TRADE: {sig.get('reason','no clean setup')}")
+    return "\n".join(L)
+
+
 def render(command: str, out: dict) -> str:
     """Dispatch to the right formatter; unknown shapes fall back to nothing."""
     return {
@@ -201,4 +270,9 @@ def render(command: str, out: dict) -> str:
         "signal": format_signal,
         "backtest": format_backtest,
         "option": format_option,
+        "score": format_score,
+        "watch": format_watch,
+        "seasonality": format_seasonality,
+        "rebalance": format_rebalance,
+        "explain": format_explain,
     }.get(command, lambda o: "")(out)

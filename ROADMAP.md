@@ -111,15 +111,17 @@ Built: optimizer (equal/inv-vol/min-var/max-sharpe), correlation, beta, stress t
 - [ ] G3. `get_calendar` extensions — dividends and splits (AV endpoints); macro/FOMC if a feed exists
 - [ ] G4. multi-timeframe fetch/analysis helper (spec: "always fetch multiple timeframes")
 
-## H. Command modes (§16) — `atlas/cli.py`
+## H. Command modes (§16) — `atlas/cli.py` ✅ DONE
 Built CLI: analyze, signal, backtest, screen, portfolio, option, serve.
 
-- [ ] H1. `score` — dedicated ATLAS-Score command (currently folded into analyze)
-- [ ] H2. `rebalance` — portfolio rebalancing suggestions (needs F1)
-- [ ] H3. `explain` — deeper rationale on a prior output
-- [ ] H4. `watch` — ongoing monitoring / watchlist
-- [ ] H5. `alert` — expose create/list/check alerts in the CLI
-- [ ] H6. `seasonality` — expose `compute_seasonality` in the CLI
+- [x] H1. `score` — dedicated ATLAS-Score view (trimmed analyze)
+- [x] H2. `rebalance` — optimize target weights vs supplied `--current`, drift-banded trades (`portfolio.rebalance_plan`)
+- [x] H3. `explain` — full narrative workup + auto-proposed trade plan
+- [x] H4. `watch` — score a comma-separated watchlist, ranked
+- [x] H5. `alert` — add / list / check / remove alerts (JSON-file store) in the CLI
+- [x] H6. `seasonality` — expose `compute_seasonality`
+
+All support `--format text`.
 
 ## I. Scoring depth (§10) — `atlas/scoring.py`
 Built: five-factor blend, attribution, adjustable weights, label, horizon.

@@ -37,7 +37,7 @@ from .patterns import pattern_base_rate
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
-from .portfolio import optimize_portfolio
+from .portfolio import optimize_portfolio, rebalance_plan
 from .screen import run_screen
 from .tools import ToolRegistry
 from .types import OHLCV, Bar, Quote
@@ -72,6 +72,7 @@ __all__ = [
     "sub_period_analysis",
     "run_screen",
     "optimize_portfolio",
+    "rebalance_plan",
     "fundamental_subscore",
     "sentiment_subscore",
     "build_event_risk",
