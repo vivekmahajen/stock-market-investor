@@ -243,9 +243,18 @@ class SyntheticProvider(DataProvider):
         self.annual_drift = annual_drift
         self.annual_vol = annual_vol
 
+    @staticmethod
+    def _stable_hash(s: str) -> int:
+        # FNV-1a: deterministic across processes (unlike Python's salted hash()).
+        h = 2166136261
+        for ch in s:
+            h = ((h ^ ord(ch)) * 16777619) & 0xFFFFFFFF
+        return h
+
     def _rng(self, symbol: str, timeframe: str):
-        # Seed deterministically from inputs so a (symbol, timeframe) is stable.
-        state = (self.seed * 2654435761 + hash((symbol, timeframe))) & 0xFFFFFFFF
+        # Seed deterministically from inputs so a (symbol, timeframe) is stable
+        # across processes (Python's built-in hash() is per-process randomised).
+        state = (self.seed * 2654435761 + self._stable_hash(f"{symbol}|{timeframe}")) & 0xFFFFFFFF
 
         def nxt() -> float:
             nonlocal state

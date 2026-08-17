@@ -87,6 +87,7 @@ def main(argv=None) -> int:
     ps.add_argument("--lookback", type=int, default=300)
     ps.add_argument("--events", action="store_true",
                     help="check the earnings calendar before issuing the plan (extra API call)")
+    ps.add_argument("--journal", default=None, help="log this signal to a calibration journal file")
 
     pb = sub.add_parser("backtest", parents=[common], help="EMA-cross demo backtest")
     pb.add_argument("symbol")
@@ -172,6 +173,12 @@ def main(argv=None) -> int:
     pmtf.add_argument("--timeframes", default="1d,1w", help="comma-separated timeframes")
     pmtf.add_argument("--lookback", type=int, default=300)
 
+    pj = sub.add_parser("journal", parents=[common], help="signal calibration journal")
+    pj.add_argument("action", choices=["resolve", "metrics", "list"])
+    pj.add_argument("symbol", nargs="?")
+    pj.add_argument("--store", default="atlas_journal.json")
+    pj.add_argument("--lookback", type=int, default=400)
+
     pp = sub.add_parser("paper", parents=[common], help="paper-trading ledger (simulated)")
     pp.add_argument("action", choices=["buy", "sell", "status", "reset"])
     pp.add_argument("symbol", nargs="?")
@@ -225,6 +232,10 @@ def main(argv=None) -> int:
                     events = build_event_risk(er["earnings"], datetime.now(timezone.utc).date())
             out = build_signal(args.symbol, args.entry, args.stop, targets, args.direction,
                                args.equity, args.risk_pct, events=events)
+        if args.journal:
+            from .journal import SignalJournal
+            rec = SignalJournal(args.journal).record(out)
+            out["journaled"] = bool(rec)
     elif args.cmd == "backtest":
         fetched = reg.get_ohlcv(args.symbol, args.timeframe, args.lookback)
         if "error" in fetched:
@@ -340,6 +351,23 @@ def main(argv=None) -> int:
         from .analysis import multi_timeframe
         tfs = tuple(t.strip() for t in args.timeframes.split(","))
         out = multi_timeframe(args.symbol, registry=reg, timeframes=tfs, lookback=args.lookback)
+    elif args.cmd == "journal":
+        from .journal import SignalJournal
+        j = SignalJournal(args.store)
+        if args.action == "metrics":
+            out = j.metrics()
+        elif args.action == "list":
+            out = {"records": j.records()}
+        else:  # resolve
+            if not args.symbol:
+                out = {"error": "resolve needs a symbol"}
+            else:
+                fetched = reg.get_ohlcv(args.symbol, "1d", args.lookback)
+                if "error" in fetched:
+                    out = fetched
+                else:
+                    resolved = j.resolve(args.symbol, fetched["_series"])
+                    out = {"resolved": resolved, "metrics": j.metrics()}
     elif args.cmd == "paper":
         from .paper import PaperBroker
         broker = PaperBroker(starting_cash=args.cash, path=args.store)

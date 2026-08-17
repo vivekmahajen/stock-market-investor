@@ -1,10 +1,14 @@
 # ATLAS — Roadmap & Gap Analysis
 
-Coverage of the [ATLAS spec](docs/atlas-spec.md) as of this document. The **core
-of every section is built, tested, and running on real data**; this file
-enumerates the remaining named features so they can be completed one at a time.
+Coverage of the [ATLAS spec](docs/atlas-spec.md). This file enumerated the named
+features so they could be completed one at a time.
 
-Legend: `[ ]` not started · `[~]` partial · `[x]` done.
+**Status: ✅ all groups A–J complete.** Every named feature is built and tested
+(the only item marked N/A is `cumulative_delta`, which requires bid/ask tick
+data no OHLCV feed provides). Remaining honest caveats are data-source limits
+(macro/FOMC calendar, live options IV/OI), not unbuilt logic.
+
+Legend: `[ ]` not started · `[~]` partial/N-A · `[x]` done.
 
 ---
 
@@ -133,10 +137,12 @@ Built: five-factor blend, attribution, adjustable weights, label, horizon.
 
 Surfaced in the analyze envelope (`score_dynamics`, `score_probabilistic`); CLI `score --study`.
 
-## J. Calibration wiring (Appendix B)
+## J. Calibration wiring (Appendix B) ✅ DONE
 Built: `CalibrationLog` (Brier, ECE, reliability buckets).
 
-- [ ] J1. signal journal — auto-log every issued signal, resolve outcomes, feed the calibration log so stated confidence becomes auditable over time
+- [x] J1. `SignalJournal` (`atlas/journal.py`) — logs each issued signal, resolves win/loss from forward price data (target-before-stop), feeds `CalibrationLog`; CLI `signal --journal` + `journal resolve|metrics|list`. Stated confidence is now auditable (Brier / ECE / reliability buckets).
+
+Also fixed: `SyntheticProvider` now uses a stable FNV-1a hash so demo data is reproducible across processes (Python's `hash()` is per-process salted).
 
 ---
 
