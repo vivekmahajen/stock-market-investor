@@ -53,9 +53,27 @@ def test_run_analysis_bad_source_falls_back_to_synthetic():
 
 def test_dashboard_html_is_selfcontained():
     # No external network dependencies (CDNs) in the page.
-    assert "<title>ATLAS Dashboard</title>" in DASHBOARD_HTML
-    assert "/api/analyze" in DASHBOARD_HTML
+    assert "<title>ATLAS Charts</title>" in DASHBOARD_HTML
+    assert "/api/analyze" in DASHBOARD_HTML and "/api/chart" in DASHBOARD_HTML
+    assert "<canvas" in DASHBOARD_HTML  # interactive chart present
     assert "http://" not in DASHBOARD_HTML.split("</style>")[0]  # no external CSS/hosts in styles
+
+
+def test_build_chart_data_shape():
+    from atlas.web import build_chart_data
+    status, d = build_chart_data({"symbol": "AAA", "source": "synthetic", "lookback": "200"})
+    assert status == 200
+    assert len(d["bars"]) == 200
+    assert set(d["bars"][0]) == {"t", "o", "h", "l", "c", "v"}
+    assert "ema20" in d["overlays"] and "bb_upper" in d["overlays"]
+    assert "support" in d["levels"] and "resistance" in d["levels"]
+    assert "trendlines" in d and "fibonacci" in d and "patterns" in d
+
+
+def test_build_chart_data_requires_symbol():
+    from atlas.web import build_chart_data
+    status, d = build_chart_data({"source": "synthetic"})
+    assert status == 400 and "error" in d
 
 
 def test_run_analysis_with_events_flag_via_synthetic_notes():
