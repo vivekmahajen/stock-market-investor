@@ -33,6 +33,7 @@ from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
 from .options import bs_greeks, bs_price, implied_vol, option_analysis
 from .chart_patterns import detect_classical
+from .patterns import pattern_base_rate
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics

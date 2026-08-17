@@ -48,31 +48,31 @@ Built: horizontal S/R by touch-count, swing pivots, Fibonacci (in `fibonacci.py`
 
 Surfaced in the analyze envelope (`structure`) and `ToolRegistry.detect_structure`.
 
-## C. Patterns (§5)
+## C. Patterns (§5) ✅ DONE
 Built candlestick: doji, hammer, engulfing, marubozu, shooting star. Classical: H&S (+inv), double top/bottom, triangles. Harmonic: Gartley, Bat, Butterfly, Crab, Shark.
 
 Candlestick — `atlas/patterns.py`
-- [ ] C1. `harami`
-- [ ] C2. `morning_star` / `evening_star`
-- [ ] C3. `three_white_soldiers` / `three_black_crows`
-- [ ] C4. `tweezers` (top/bottom)
-- [ ] C5. `hanging_man` (trend-context distinct from hammer)
+- [x] C1. `bullish_harami` / `bearish_harami`
+- [x] C2. `morning_star` / `evening_star`
+- [x] C3. `three_white_soldiers` / `three_black_crows`
+- [x] C4. `tweezer_top` / `tweezer_bottom`
+- [x] C5. `hanging_man` (trend-context; + `inverted_hammer`)
 
 Classical — `atlas/chart_patterns.py`
-- [ ] C6. `triple_top` / `triple_bottom`
-- [ ] C7. `wedge` (rising/falling)
-- [ ] C8. `flag`
-- [ ] C9. `pennant`
-- [ ] C10. `rectangle`
-- [ ] C11. `cup_and_handle`
-- [ ] C12. `rounding_top` / `rounding_bottom`
-- [ ] C13. `broadening_formation`
+- [x] C6. `triple_top` / `triple_bottom`
+- [x] C7. `rising_wedge` / `falling_wedge`
+- [x] C8. `bull_flag` / `bear_flag`
+- [x] C9. `bull_pennant` / `bear_pennant`
+- [x] C10. `rectangle`
+- [x] C11. `cup_and_handle`
+- [x] C12. `rounding_top` / `rounding_bottom`
+- [x] C13. `broadening_formation`
 
 Harmonic — `atlas/harmonics.py`
-- [ ] C14. `cypher`
+- [x] C14. `cypher`
 
-Base rates — `atlas/patterns.py` / new
-- [ ] C15. `pattern_base_rate` — empirical follow-through study over the series (fills the `base_rate: null` fields)
+Base rates — `atlas/patterns.py`
+- [x] C15. `pattern_base_rate` — in-sample empirical follow-through study; attached to candlestick patterns in the analyze envelope
 
 ## D. Signal enrichment (§6) — `atlas/analysis.py` ✅ DONE
 Built: entry/stop/targets/R/position-size, sub-threshold-R rejection, event attachment.

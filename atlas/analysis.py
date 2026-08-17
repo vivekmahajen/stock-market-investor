@@ -19,7 +19,7 @@ from .harmonics import detect_harmonics
 from .levels import (classify_by_price, detect_channels, detect_gaps,
                      detect_trendlines, nearest_levels, pivot_points,
                      volume_profile_levels)
-from .patterns import latest_patterns
+from .patterns import latest_patterns, pattern_base_rate
 from .risk import r_multiple, size_position
 from .tools import ToolRegistry
 from .types import OHLCV
@@ -186,8 +186,14 @@ def analyze(
         "open_gaps": [g for g in detect_gaps(series) if not g["filled"]][-5:],
         "volume_profile": volume_profile_levels(series),
     }
+    candlestick = latest_patterns(series, lookback=5)
+    for p in candlestick:  # attach in-sample empirical follow-through where available
+        br = pattern_base_rate(series, p["name"])
+        if br:
+            p["base_rate"] = br["follow_through_rate"]
+            p["base_rate_sample"] = br["sample_size"]
     patterns = {
-        "candlestick": latest_patterns(series, lookback=5),
+        "candlestick": candlestick,
         "classical": detect_classical(series),
         "harmonic": detect_harmonics(series),
     }
