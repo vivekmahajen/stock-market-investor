@@ -37,7 +37,9 @@ from .patterns import pattern_base_rate
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
-from .portfolio import optimize_portfolio, rebalance_plan
+from .portfolio import (benchmark_comparison, optimize_portfolio,
+                        periodic_suggestions, position_roles, rebalance_plan,
+                        tax_aware_notes)
 from .screen import run_screen
 from .tools import ToolRegistry
 from .types import OHLCV, Bar, Quote
@@ -73,6 +75,10 @@ __all__ = [
     "run_screen",
     "optimize_portfolio",
     "rebalance_plan",
+    "position_roles",
+    "benchmark_comparison",
+    "periodic_suggestions",
+    "tax_aware_notes",
     "fundamental_subscore",
     "sentiment_subscore",
     "build_event_risk",

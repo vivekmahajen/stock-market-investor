@@ -96,14 +96,16 @@ Built: next-bar-open engine, costs/slippage, full metrics, small-sample verdict.
 
 CLI: `backtest --robustness {split|walkforward|sensitivity|subperiods}`.
 
-## F. Portfolio depth (§11) — `atlas/portfolio.py`
+## F. Portfolio depth (§11) — `atlas/portfolio.py` ✅ DONE
 Built: optimizer (equal/inv-vol/min-var/max-sharpe), correlation, beta, stress test.
 
-- [ ] F1. `rebalance_plan` — drift bands / schedule, trades to make, turnover cost
-- [ ] F2. `position_roles` — core / satellite / hedge tagging
-- [ ] F3. `benchmark_comparison` — vs index or 60/40 (return + risk), not just beta
-- [ ] F4. `periodic_suggestions` — what changed, add/trim, why
-- [ ] F5. tax-aware notes (optional, needs lot data)
+- [x] F1. `rebalance_plan` — drift-banded trades, turnover, per-trade amounts
+- [x] F2. `position_roles` — core / satellite / hedge from weight, vol, beta
+- [x] F3. `benchmark_comparison` — return + risk + tracking error + information ratio + verdict
+- [x] F4. `periodic_suggestions` — re-optimize, diff, explain add/trim moves
+- [x] F5. `tax_aware_notes` — taxable-sell flags; short/long-term when lot data supplied
+
+Surfaced: `portfolio` command now includes roles + benchmark comparison; `rebalance` includes roles + tax notes.
 
 ## G. §3 tools
 - [ ] G1. `get_options_chain(symbol, expiry?)` — build a chain (strikes around spot × expiries) priced with `options.py` greeks; live feed optional

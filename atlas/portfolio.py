@@ -237,6 +237,166 @@ def _diagnostics(symbols, w, cov, series_by_symbol, benchmark, sectors, rets) ->
     }
 
 
+def _stdev(xs: List[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    m = sum(xs) / len(xs)
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+
+def _median(xs: List[float]) -> float:
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def _beta_to(asset: List[float], bench: List[float]) -> Optional[float]:
+    n = min(len(asset), len(bench))
+    if n < 2:
+        return None
+    a, b = asset[-n:], bench[-n:]
+    ma, mb = sum(a) / n, sum(b) / n
+    cov = sum((a[i] - ma) * (b[i] - mb) for i in range(n)) / (n - 1)
+    var = sum((b[i] - mb) ** 2 for i in range(n)) / (n - 1)
+    return cov / var if var else None
+
+
+def _return_stats(r: List[float], rf: float = 0.0) -> dict:
+    """Annualised return/vol/Sharpe and max drawdown from a per-bar return series."""
+    if not r:
+        return {"annual_return_pct": 0.0, "annual_vol_pct": 0.0, "sharpe": 0.0, "max_drawdown_pct": 0.0}
+    mean = sum(r) / len(r)
+    ann_ret = mean * TRADING_DAYS
+    vol = _stdev(r) * math.sqrt(TRADING_DAYS)
+    eq, peak, mdd = 1.0, 1.0, 0.0
+    for x in r:
+        eq *= (1 + x)
+        peak = max(peak, eq)
+        mdd = min(mdd, eq / peak - 1.0)
+    return {
+        "annual_return_pct": round(ann_ret * 100, 2),
+        "annual_vol_pct": round(vol * 100, 2),
+        "sharpe": round((ann_ret - rf) / vol, 2) if vol else 0.0,
+        "max_drawdown_pct": round(mdd * 100, 2),
+    }
+
+
+def _portfolio_returns(series_by_symbol: Dict[str, OHLCV], weights: Dict[str, float]) -> List[float]:
+    symbols = list(weights.keys())
+    rets = _align([daily_returns(series_by_symbol[s]) for s in symbols])
+    n = len(rets[0])
+    return [sum(weights[symbols[i]] * rets[i][t] for i in range(len(symbols))) for t in range(n)]
+
+
+# --------------------------------------------------------------------------- #
+# F2. Position roles
+# --------------------------------------------------------------------------- #
+def position_roles(series_by_symbol: Dict[str, OHLCV], weights: Dict[str, float],
+                   benchmark: Optional[OHLCV] = None) -> Dict[str, dict]:
+    """Tag each position core / satellite / hedge from weight, volatility, and
+    beta (to the benchmark, or to the portfolio itself if none given)."""
+    symbols = list(weights.keys())
+    rets = {s: daily_returns(series_by_symbol[s]) for s in symbols}
+    n = min(len(r) for r in rets.values())
+    ref = (daily_returns(benchmark)[-n:] if benchmark is not None
+           else [sum(weights[s] * rets[s][-n:][t] for s in symbols) for t in range(n)])
+    vols = {s: _stdev(rets[s][-n:]) * math.sqrt(TRADING_DAYS) for s in symbols}
+    betas = {s: _beta_to(rets[s][-n:], ref) for s in symbols}
+    med_w = _median(list(weights.values()))
+    med_vol = _median(list(vols.values()))
+
+    roles = {}
+    for s in symbols:
+        b = betas[s]
+        if b is not None and b < 0.15:
+            role = "hedge"
+        elif weights[s] >= med_w and vols[s] <= med_vol:
+            role = "core"
+        else:
+            role = "satellite"
+        roles[s] = {"role": role, "weight": round(weights[s], 4),
+                    "annual_vol_pct": round(vols[s] * 100, 2),
+                    "beta": round(b, 3) if b is not None else None}
+    return roles
+
+
+# --------------------------------------------------------------------------- #
+# F3. Benchmark comparison
+# --------------------------------------------------------------------------- #
+def benchmark_comparison(series_by_symbol: Dict[str, OHLCV], weights: Dict[str, float],
+                         benchmark: OHLCV, rf: float = 0.0) -> dict:
+    """Compare the portfolio to a benchmark on return, risk, and active metrics —
+    so the user can judge whether the complexity earns its keep."""
+    port = _portfolio_returns(series_by_symbol, weights)
+    bench = daily_returns(benchmark)
+    n = min(len(port), len(bench))
+    port, bench = port[-n:], bench[-n:]
+    ps, bs = _return_stats(port, rf), _return_stats(bench, rf)
+    active = [port[t] - bench[t] for t in range(n)]
+    te = _stdev(active) * math.sqrt(TRADING_DAYS)
+    active_ret = (ps["annual_return_pct"] - bs["annual_return_pct"]) / 100.0
+    beats = ps["sharpe"] > bs["sharpe"]
+    return {
+        "portfolio": ps,
+        "benchmark": bs,
+        "beta": round(_beta_to(port, bench) or 0.0, 3),
+        "tracking_error_pct": round(te * 100, 2),
+        "information_ratio": round(active_ret / te, 2) if te else 0.0,
+        "verdict": ("portfolio beats the benchmark on risk-adjusted return"
+                    if beats else "does not beat the benchmark risk-adjusted — simplicity may win"),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# F4. Periodic suggestions
+# --------------------------------------------------------------------------- #
+def periodic_suggestions(series_by_symbol: Dict[str, OHLCV], current_weights: Dict[str, float],
+                         objective: str = "min_variance", drift_band: float = 0.05,
+                         benchmark: Optional[OHLCV] = None) -> dict:
+    """Re-optimize, diff against current weights, and explain the add/trim moves."""
+    res = optimize_portfolio(series_by_symbol, objective=objective, benchmark=benchmark)
+    target = res.weights
+    reb = rebalance_plan(current_weights, target, drift_band)
+    roles = position_roles(series_by_symbol, target, benchmark)
+    suggestions = []
+    for t in reb["trades"]:
+        if t["action"] == "hold":
+            continue
+        r = roles.get(t["symbol"], {})
+        suggestions.append({
+            "symbol": t["symbol"], "action": t["action"],
+            "reason": f"target {t['target_weight']:.0%} vs current {t['current_weight']:.0%}; "
+                      f"role={r.get('role','?')}, vol={r.get('annual_vol_pct')}%",
+        })
+    return {"target_weights": target, "rebalance": reb, "roles": roles,
+            "suggestions": suggestions, "tax": tax_aware_notes(reb["trades"])}
+
+
+# --------------------------------------------------------------------------- #
+# F5. Tax-aware notes
+# --------------------------------------------------------------------------- #
+def tax_aware_notes(trades: List[dict], lots: Optional[Dict[str, dict]] = None,
+                    long_term_days: int = 365) -> dict:
+    """Flag taxable sells and (when lot data is supplied) short vs long-term gains."""
+    taxable = [t["symbol"] for t in trades if t.get("action") in ("trim", "exit")]
+    notes: List[str] = []
+    if lots:
+        for sym in taxable:
+            lot = lots.get(sym)
+            if lot and "holding_days" in lot:
+                term = "long-term" if lot["holding_days"] >= long_term_days else "short-term"
+                notes.append(f"{sym}: {term} holding — gains taxed accordingly.")
+    elif taxable:
+        notes.append(f"Reductions in {', '.join(taxable)} are taxable events; no lot data "
+                     "provided, so short- vs long-term gain type can't be computed.")
+    if taxable:
+        notes.append("Consider tax-loss harvesting and the 30-day wash-sale window before selling.")
+    return {"taxable_sells": taxable, "notes": notes}
+
+
 def rebalance_plan(current: Dict[str, float], target: Dict[str, float],
                    drift_band: float = 0.05, capital: Optional[float] = None) -> dict:
     """Compare current weights to target and produce the trades to close the gap.
