@@ -31,6 +31,8 @@ from .robustness import (parameter_sensitivity, sub_period_analysis,
 from .calibration import CalibrationLog, SignalRecord
 from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
+from .scoring import (probabilistic_framing, score_forward_study,
+                      what_would_change)
 from .analysis import multi_timeframe
 from .options import bs_greeks, bs_price, build_chain, implied_vol, option_analysis
 from .paper import PaperBroker
@@ -83,6 +85,9 @@ __all__ = [
     "tax_aware_notes",
     "fundamental_subscore",
     "sentiment_subscore",
+    "what_would_change",
+    "score_forward_study",
+    "probabilistic_framing",
     "build_event_risk",
     "parse_earnings_csv",
     "bs_price",

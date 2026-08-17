@@ -157,13 +157,123 @@ def atlas_score(
     )
 
 
+_LABEL_THRESHOLDS = [(75, "buy"), (60, "accumulate"), (45, "hold"), (30, "reduce"), (0, "avoid")]
+
+
 def _label(score: float) -> str:
-    if score >= 75:
-        return "buy"
-    if score >= 60:
-        return "accumulate"
-    if score >= 45:
-        return "hold"
-    if score >= 30:
-        return "reduce"
+    for thr, name in _LABEL_THRESHOLDS:
+        if score >= thr:
+            return name
     return "avoid"
+
+
+# --------------------------------------------------------------------------- #
+# I2. "What would change the score"
+# --------------------------------------------------------------------------- #
+def what_would_change(subscores: Dict[str, Optional[float]],
+                      weights: Optional[Dict[str, float]] = None,
+                      score: Optional[float] = None) -> dict:
+    """Show the concrete factor moves that would upgrade or downgrade the label.
+
+    Because the score is a renormalized weighted mean of the *present* factors,
+    raising factor k by Δ moves the score by ``norm[k]·Δ``; this inverts that to
+    report how far each factor must move to cross the nearest label boundary.
+    """
+    weights = dict(weights or DEFAULT_WEIGHTS)
+    present = {k: v for k, v in subscores.items() if v is not None and k in weights}
+    if not present:
+        return {"note": "no sub-scores available"}
+    if score is None:
+        score = atlas_score(subscores, weights).score
+    wsum = sum(weights[k] for k in present)
+    norm = {k: weights[k] / wsum for k in present}
+
+    up_thr = min((t for t, _ in _LABEL_THRESHOLDS if t > score), default=None)
+    floor = max((t for t, _ in _LABEL_THRESHOLDS if t <= score), default=0)
+
+    result = {"current_score": round(score, 1), "current_label": _label(score)}
+    if up_thr is not None:
+        needed = up_thr - score
+        opts = []
+        for k in present:
+            delta = needed / norm[k]
+            if present[k] + delta <= 100.5:
+                opts.append({"factor": k, "current": round(present[k], 1),
+                             "raise_by": round(delta, 1), "to": round(min(100.0, present[k] + delta), 1)})
+        result["to_upgrade"] = {"target_label": _label(up_thr), "at_score": up_thr,
+                                "options": sorted(opts, key=lambda o: o["raise_by"])[:3]}
+    if floor > 0:
+        drop = score - floor + 0.1
+        dopts = []
+        for k in present:
+            delta = drop / norm[k]
+            if present[k] - delta >= -0.5:
+                dopts.append({"factor": k, "current": round(present[k], 1), "fall_by": round(delta, 1)})
+        result["to_downgrade"] = {"target_label": _label(floor - 1), "below_score": floor,
+                                  "options": sorted(dopts, key=lambda o: o["fall_by"])[:3]}
+    result["biggest_drag"] = min(present, key=lambda k: (present[k] - 50) * norm[k])
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# I1. Probabilistic framing — in-sample score / forward-return study
+# --------------------------------------------------------------------------- #
+_SCORE_BANDS = [(0, 40), (40, 55), (55, 70), (70, 101)]
+
+
+def score_forward_study(series: OHLCV, forward: int = 20, step: int = 2,
+                        benchmark: Optional[OHLCV] = None) -> Optional[dict]:
+    """In-sample study: bucket the technical score at each past bar by band and
+    measure the forward return (vs a benchmark if given). Honest, in-sample, and
+    labelled as such — not a universal base rate."""
+    n = len(series)
+    if n < 80 + forward:
+        return None
+    buckets = {(lo, hi): {"fwd": [], "hits": 0} for lo, hi in _SCORE_BANDS}
+    for i in range(60, n - forward, max(1, step)):
+        sc = technical_subscore(series.slice(0, i + 1))
+        if sc is None or series.close[i] <= 0:
+            continue
+        fwd = (series.close[i + forward] / series.close[i] - 1.0) * 100.0
+        beat = fwd > 0
+        if benchmark is not None and len(benchmark) > i + forward and benchmark.close[i] > 0:
+            bwd = (benchmark.close[i + forward] / benchmark.close[i] - 1.0) * 100.0
+            beat = fwd > bwd
+        for lo, hi in _SCORE_BANDS:
+            if lo <= sc < hi:
+                buckets[(lo, hi)]["fwd"].append(fwd)
+                if beat:
+                    buckets[(lo, hi)]["hits"] += 1
+                break
+    rows = []
+    for lo, hi in _SCORE_BANDS:
+        b = buckets[(lo, hi)]
+        m = len(b["fwd"])
+        if m == 0:
+            continue
+        rows.append({"band": f"{lo}-{min(hi, 100)}", "samples": m,
+                     "pct_positive": round(b["hits"] / m * 100, 1),
+                     "avg_forward_return_pct": round(sum(b["fwd"]) / m, 2)})
+    return {"forward_bars": forward, "metric": "beat benchmark" if benchmark else "positive return",
+            "bands": rows, "basis": "in-sample study on this series (not a universal base rate)"}
+
+
+def probabilistic_framing(series: OHLCV, current_score: float, benchmark: Optional[OHLCV] = None,
+                          forward: int = 20, step: int = 2) -> Optional[dict]:
+    """A plain-language, sample-sized probability for the current score band."""
+    study = score_forward_study(series, forward=forward, step=step, benchmark=benchmark)
+    if not study:
+        return None
+    band = None
+    for row in study["bands"]:
+        lo, hi = (float(x) for x in row["band"].split("-"))
+        if lo <= current_score <= hi:
+            band = row
+            break
+    if not band:
+        return {"study": study, "framing": "No in-sample history in the current score band."}
+    framing = (f"In-sample on this series, bars in the {band['band']} score band {study['metric']} "
+               f"{band['pct_positive']}% of the time over the next {forward} bars "
+               f"(avg {band['avg_forward_return_pct']}%, sample={band['samples']}). In-sample only — "
+               "not a promise about the future.")
+    return {"framing": framing, "band": band, "study": study}

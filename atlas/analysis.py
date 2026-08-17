@@ -81,6 +81,7 @@ def analyze(
     with_fundamentals: bool = False,
     with_sentiment: bool = False,
     with_events: bool = False,
+    with_score_study: bool = False,
 ) -> dict:
     """Full workup for ``analyze <symbol>`` producing the Section 15 envelope.
 
@@ -100,11 +101,13 @@ def analyze(
     tech = scoring.technical_subscore(series)
 
     rs = None
+    bench_series = None
     notes = []
     if benchmark:
         bench = registry.get_ohlcv(benchmark, timeframe, lookback)
         if "_series" in bench:
-            rs = scoring.relative_strength_subscore(series, bench["_series"])
+            bench_series = bench["_series"]
+            rs = scoring.relative_strength_subscore(series, bench_series)
             if rs is None:
                 notes.append(
                     f"relative_strength is null: not enough overlapping history between "
@@ -176,6 +179,10 @@ def analyze(
         "risk": _risk_subscore(series),
     }
     score = scoring.atlas_score(subscores)
+    score_value = score.to_dict()["atlas_score"]
+    score_dynamics = scoring.what_would_change(subscores, score=score_value)
+    score_probabilistic = (scoring.probabilistic_framing(series, score_value, benchmark=bench_series)
+                           if with_score_study else None)
 
     levels = classify_by_price(series)
     near = nearest_levels(series)
@@ -213,6 +220,8 @@ def analyze(
         "score_label": score.label,
         "score_horizon": score.horizon,
         "top_contributors": score.contributors,
+        "score_dynamics": score_dynamics,
+        "score_probabilistic": score_probabilistic,
         "levels": {
             "support": [s["price"] for s in levels["support"][:5]],
             "resistance": [r["price"] for r in levels["resistance"][:5]],
