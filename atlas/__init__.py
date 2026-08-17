@@ -31,7 +31,9 @@ from .robustness import (parameter_sensitivity, sub_period_analysis,
 from .calibration import CalibrationLog, SignalRecord
 from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
-from .options import bs_greeks, bs_price, implied_vol, option_analysis
+from .analysis import multi_timeframe
+from .options import bs_greeks, bs_price, build_chain, implied_vol, option_analysis
+from .paper import PaperBroker
 from .chart_patterns import detect_classical
 from .patterns import pattern_base_rate
 from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
@@ -87,6 +89,9 @@ __all__ = [
     "bs_greeks",
     "implied_vol",
     "option_analysis",
+    "build_chain",
+    "PaperBroker",
+    "multi_timeframe",
     "Alert",
     "AlertStore",
     "CalibrationLog",

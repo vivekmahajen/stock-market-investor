@@ -156,6 +156,28 @@ def main(argv=None) -> int:
     pal.add_argument("--id", dest="alert_id", default=None)
     pal.add_argument("--store", default="atlas_alerts.json")
 
+    pch = sub.add_parser("chain", parents=[common], help="model-generated options chain (Black-Scholes)")
+    pch.add_argument("symbol")
+    pch.add_argument("--dtes", default="30,60,90", help="comma-separated days-to-expiry")
+    pch.add_argument("--vol", type=float, default=None, help="override sigma (else realized vol)")
+    pch.add_argument("--strikes", type=int, default=5, help="strikes each side of spot")
+
+    pcal = sub.add_parser("calendar", parents=[common], help="earnings + dividends + splits")
+    pcal.add_argument("symbol")
+
+    pmtf = sub.add_parser("mtf", parents=[common], help="multi-timeframe alignment")
+    pmtf.add_argument("symbol")
+    pmtf.add_argument("--timeframes", default="1d,1w", help="comma-separated timeframes")
+    pmtf.add_argument("--lookback", type=int, default=300)
+
+    pp = sub.add_parser("paper", parents=[common], help="paper-trading ledger (simulated)")
+    pp.add_argument("action", choices=["buy", "sell", "status", "reset"])
+    pp.add_argument("symbol", nargs="?")
+    pp.add_argument("--qty", type=float, default=None)
+    pp.add_argument("--price", type=float, default=None)
+    pp.add_argument("--cash", type=float, default=100_000)
+    pp.add_argument("--store", default="atlas_paper.json")
+
     po = sub.add_parser("option", parents=[common], help="Black-Scholes price + greeks (+ implied vol)")
     po.add_argument("--spot", type=float, required=True)
     po.add_argument("--strike", type=float, required=True)
@@ -306,6 +328,32 @@ def main(argv=None) -> int:
             out = {"removed": store.remove(args.alert_id)}
         else:  # check
             out = {"triggered": reg.check_alerts()}
+    elif args.cmd == "chain":
+        dtes = [int(x) for x in args.dtes.split(",")]
+        out = reg.get_options_chain(args.symbol, expiries_days=dtes, sigma=args.vol, n_strikes=args.strikes)
+    elif args.cmd == "calendar":
+        out = reg.get_calendar(args.symbol)
+    elif args.cmd == "mtf":
+        from .analysis import multi_timeframe
+        tfs = tuple(t.strip() for t in args.timeframes.split(","))
+        out = multi_timeframe(args.symbol, registry=reg, timeframes=tfs, lookback=args.lookback)
+    elif args.cmd == "paper":
+        from .paper import PaperBroker
+        broker = PaperBroker(starting_cash=args.cash, path=args.store)
+        if args.action in ("buy", "sell"):
+            if not args.symbol or args.qty is None or args.price is None:
+                out = {"error": "buy/sell need symbol, --qty and --price"}
+            else:
+                try:
+                    fill = broker.submit(args.symbol, args.action, args.qty, args.price)
+                    out = {"fill": fill, "account": broker.to_dict()}
+                except ValueError as e:
+                    out = {"error": str(e)}
+        elif args.action == "reset":
+            broker.reset()
+            out = {"reset": True, "account": broker.to_dict()}
+        else:  # status
+            out = broker.to_dict(include_trades=True)
     elif args.cmd == "option":
         from .options import option_analysis
         out = option_analysis(args.spot, args.strike, args.dte / 365.0, args.rate,

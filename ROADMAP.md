@@ -107,11 +107,11 @@ Built: optimizer (equal/inv-vol/min-var/max-sharpe), correlation, beta, stress t
 
 Surfaced: `portfolio` command now includes roles + benchmark comparison; `rebalance` includes roles + tax notes.
 
-## G. §3 tools
-- [ ] G1. `get_options_chain(symbol, expiry?)` — build a chain (strikes around spot × expiries) priced with `options.py` greeks; live feed optional
-- [ ] G2. `paper_trade(order)` — simulated fill + a simple position/PnL ledger (never live)
-- [ ] G3. `get_calendar` extensions — dividends and splits (AV endpoints); macro/FOMC if a feed exists
-- [ ] G4. multi-timeframe fetch/analysis helper (spec: "always fetch multiple timeframes")
+## G. §3 tools ✅ DONE
+- [x] G1. `get_options_chain` — `options.build_chain` prices strikes × expiries (call/put + greeks) at realized vol; `ToolRegistry.get_options_chain`; CLI `chain`. Model-generated, clearly labelled (no live IV/OI).
+- [x] G2. `paper_trade` — `atlas/paper.py` `PaperBroker` (fills, positions, cash, realized P&L, long/short/flip, JSON persistence); `ToolRegistry.paper_trade`; CLI `paper buy|sell|status|reset`. Never live.
+- [x] G3. `get_calendar` extensions — Alpha Vantage `get_dividends` / `get_splits`; `ToolRegistry.get_calendar` merges earnings + dividends + splits; CLI `calendar`. (Macro/FOMC: N/A — no free event feed.)
+- [x] G4. `multi_timeframe(symbol)` — regime/technical/confluence across timeframes + alignment verdict; CLI `mtf`.
 
 ## H. Command modes (§16) — `atlas/cli.py` ✅ DONE
 Built CLI: analyze, signal, backtest, screen, portfolio, option, serve.

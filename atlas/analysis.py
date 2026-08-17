@@ -233,6 +233,43 @@ def analyze(
     }
 
 
+def multi_timeframe(symbol: str, registry: Optional[ToolRegistry] = None,
+                    timeframes=("1d", "1w"), lookback: int = 300) -> dict:
+    """Analyze a symbol across timeframes and report alignment (§3/§4).
+
+    The spec insists on multi-timeframe analysis; this runs regime + technical +
+    confluence on each timeframe and flags whether they agree.
+    """
+    registry = registry or ToolRegistry()
+    frames = []
+    for tf in timeframes:
+        fetched = registry.get_ohlcv(symbol, tf, lookback)
+        if "error" in fetched:
+            frames.append({"timeframe": tf, "error": fetched["error"]})
+            continue
+        s = fetched["_series"]
+        conf = confluence_score(s)
+        frames.append({
+            "timeframe": tf,
+            "regime": classify_regime(s),
+            "technical": scoring.technical_subscore(s),
+            "confluence": conf.get("score"),
+            "last_close": round(s.close[-1], 4) if len(s) else None,
+        })
+    regimes = [f.get("regime") for f in frames if "regime" in f]
+    up = sum(1 for r in regimes if r == "trending_up")
+    down = sum(1 for r in regimes if r == "trending_down")
+    if regimes and up == len(regimes):
+        alignment = "aligned bullish across all timeframes"
+    elif regimes and down == len(regimes):
+        alignment = "aligned bearish across all timeframes"
+    elif up and down:
+        alignment = "conflicting timeframes — higher timeframe should win; lower confidence"
+    else:
+        alignment = "mixed / range on one or more timeframes"
+    return {"symbol": symbol, "timeframes": frames, "alignment": alignment}
+
+
 def _risk_subscore(series: OHLCV) -> Optional[float]:
     """Lower volatility & drawdown -> higher risk/quality sub-score."""
     atrp = ind.atr_percent(series, 14)

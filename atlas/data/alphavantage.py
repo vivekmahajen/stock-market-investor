@@ -226,6 +226,20 @@ class AlphaVantageProvider:
             raise RuntimeError(_explain_json(text, symbol))
         return parse_earnings_csv(text)
 
+    def get_dividends(self, symbol: str) -> list:
+        """Dividend history (DIVIDENDS endpoint). Returns the raw rows."""
+        self._require_key()
+        params = {"function": "DIVIDENDS", "symbol": symbol.upper(), "apikey": self.api_key or "demo"}
+        obj = self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
+        return obj.get("data", []) if isinstance(obj, dict) else []
+
+    def get_splits(self, symbol: str) -> list:
+        """Split history (SPLITS endpoint). Returns the raw rows."""
+        self._require_key()
+        params = {"function": "SPLITS", "symbol": symbol.upper(), "apikey": self.api_key or "demo"}
+        obj = self._json(f"{_BASE}?{urllib.parse.urlencode(params)}", symbol)
+        return obj.get("data", []) if isinstance(obj, dict) else []
+
     def _json(self, url: str, symbol: str) -> dict:
         text = self._do_fetch(url)
         try:
