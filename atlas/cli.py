@@ -233,6 +233,7 @@ def main(argv=None) -> int:
         symbols = [s.strip() for s in args.symbols.split(",")]
         out = reg.optimize_portfolio(symbols, objective=args.objective,
                                      max_weight=args.max_weight, benchmark=args.benchmark)
+        out.pop("_series_by_symbol", None)
     elif args.cmd == "score":
         full = analyze(args.symbol, registry=reg, timeframe=args.timeframe, lookback=args.lookback,
                        benchmark=args.benchmark, with_fundamentals=args.fundamentals,
@@ -279,9 +280,13 @@ def main(argv=None) -> int:
             if "error" in opt:
                 out = opt
             else:
+                from .portfolio import tax_aware_notes
+                opt.pop("_series_by_symbol", None)
                 current = dict(zip(symbols, weights))
                 out = rebalance_plan(current, opt["weights"], drift_band=args.drift_band, capital=args.capital)
                 out["target_weights"] = opt["weights"]
+                out["roles"] = opt.get("roles")
+                out["tax"] = tax_aware_notes(out["trades"])
     elif args.cmd == "alert":
         from .alerts import AlertStore
         store = AlertStore(args.store)

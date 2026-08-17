@@ -191,7 +191,12 @@ class ToolRegistry:
             bench_series = bf.get("_series")
         res = optimize_portfolio(series_by_symbol, objective=objective, benchmark=bench_series, **kwargs)
         out = res.to_dict()
+        from .portfolio import benchmark_comparison, position_roles
+        out["roles"] = position_roles(series_by_symbol, res.weights, bench_series)
+        if bench_series is not None:
+            out["benchmark_comparison"] = benchmark_comparison(series_by_symbol, res.weights, bench_series)
         out["simulated"] = getattr(self.provider, "simulated", False)
+        out["_series_by_symbol"] = series_by_symbol  # in-process handle for rebalance suggestions
         return out
 
     def get_fundamentals(self, symbol: str) -> dict:
