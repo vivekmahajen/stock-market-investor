@@ -140,3 +140,37 @@ def option_analysis(
 def _validate(S: float, K: float) -> None:
     if S <= 0 or K <= 0:
         raise ValueError("spot and strike must be positive")
+
+
+def build_chain(spot: float, expiries_days, sigma: float, r: float = 0.04, q: float = 0.0,
+                n_strikes: int = 5, strike_step_pct: float = 0.05) -> dict:
+    """Build a model-generated options chain (Black-Scholes at ``sigma``).
+
+    Strikes are placed symmetrically around ``spot``; each is priced (call & put)
+    with full greeks for each expiry in ``expiries_days``. This is a *computed*
+    chain — it is not live market implied vol or open interest, and says so.
+    """
+    if spot <= 0 or sigma <= 0:
+        raise ValueError("spot and sigma must be positive")
+    strikes = [round(spot * (1 + k * strike_step_pct), 2) for k in range(-n_strikes, n_strikes + 1)]
+    expiries = []
+    for dte in expiries_days:
+        T = dte / 365.0
+        rows = []
+        for K in strikes:
+            call = option_analysis(spot, K, T, r, CALL, q, sigma=sigma)
+            put = option_analysis(spot, K, T, r, PUT, q, sigma=sigma)
+            rows.append({
+                "strike": K,
+                "call": {"price": call["price"], "greeks": call["greeks"]},
+                "put": {"price": put["price"], "greeks": put["greeks"]},
+                "call_moneyness": call["moneyness"],
+            })
+        expiries.append({"dte": dte, "T_years": round(T, 4), "strikes": rows})
+    return {
+        "spot": round(spot, 4), "sigma": round(sigma, 4), "rate": r, "dividend_yield": q,
+        "generated": True,
+        "note": "model-generated chain (Black-Scholes at the given/realized vol); "
+                "not live market implied vol or open interest",
+        "expiries": expiries,
+    }

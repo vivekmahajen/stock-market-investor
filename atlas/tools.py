@@ -226,6 +226,56 @@ class ToolRegistry:
             return {"error": f"get_earnings_calendar failed: {e}"}
         return {"earnings": rows, "provenance": self.provider.provenance("get_earnings_calendar", symbol, None, None).to_dict()}
 
+    def get_options_chain(self, symbol: str, expiries_days=(30, 60, 90), sigma: Optional[float] = None,
+                          timeframe: str = "1d", lookback: int = 200, n_strikes: int = 5) -> dict:
+        """Model-generated options chain priced with Black-Scholes at realized vol."""
+        from .options import build_chain
+
+        f = self.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in f:
+            return {"error": f["error"]}
+        series = f["_series"]
+        if sigma is None:
+            hv = ind.historical_volatility(list(series.close), 20)
+            last_hv = next((v for v in reversed(hv) if v is not None), None)
+            sigma = (last_hv / 100.0) if last_hv else 0.3
+        chain = build_chain(series.close[-1], expiries_days, sigma, n_strikes=n_strikes)
+        chain["symbol"] = symbol
+        chain["simulated"] = f["provenance"].get("simulated", False)
+        chain["sigma_source"] = "20-bar realized volatility (proxy for implied vol)"
+        return chain
+
+    def get_calendar(self, symbol: str, horizon: str = "3month") -> dict:
+        """Unified calendar: upcoming earnings + dividends + splits (§3/§12)."""
+        out: dict = {"symbol": symbol, "earnings": [], "dividends": [], "splits": []}
+        errors = []
+        er = self.get_earnings_calendar(symbol, horizon)
+        if "earnings" in er:
+            out["earnings"] = er["earnings"]
+        else:
+            errors.append(er.get("error"))
+        for name, meth in (("dividends", "get_dividends"), ("splits", "get_splits")):
+            if hasattr(self.provider, meth):
+                try:
+                    out[name] = getattr(self.provider, meth)(symbol)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{name}: {e}")
+            else:
+                errors.append(f"{name}: provider has no feed")
+        out["errors"] = [e for e in errors if e]
+        return out
+
+    def paper_trade(self, order: dict) -> dict:
+        """Submit a simulated order to the registry's paper broker (never live)."""
+        if not hasattr(self, "broker"):
+            from .paper import PaperBroker
+            self.broker = PaperBroker()
+        try:
+            fill = self.broker.submit(order["symbol"], order["side"], float(order["qty"]), float(order["price"]))
+        except (KeyError, ValueError) as e:
+            return {"error": f"paper_trade failed: {e}"}
+        return {"fill": fill, "account": self.broker.to_dict()}
+
     def create_alert(self, symbol: str, condition: dict, channel: str = "log", note: str = "") -> dict:
         try:
             alert = self.alerts.create_alert(symbol, condition, channel, note)
