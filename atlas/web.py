@@ -120,6 +120,78 @@ def build_chart_data(params: dict):
         return 500, {"error": f"{type(e).__name__}: {e}"}
 
 
+def _ema_cross(fast: int, slow: int):
+    from .indicators import ema
+
+    def fn(series, i):
+        c = list(series.close[: i + 1])
+        ef, es = ema(c, fast), ema(c, slow)
+        if ef[i] is None or es[i] is None:
+            return 0
+        return 1 if ef[i] > es[i] else -1
+
+    return fn
+
+
+def build_backtest_data(params: dict):
+    """Run an EMA-cross backtest and return metrics, equity curve, and trade markers."""
+    from .backtest import run_backtest, verdict
+
+    symbol = (params.get("symbol") or "").strip().upper()
+    if not symbol:
+        return 400, {"error": "symbol is required"}
+    source = (params.get("source") or "synthetic").strip()
+    timeframe = params.get("timeframe", "1d") or "1d"
+    try:
+        fast = int(params.get("fast", 20) or 20)
+        slow = int(params.get("slow", 50) or 50)
+        comm = float(params.get("commission_bps", 1) or 1)
+        slip = float(params.get("slippage_bps", 2) or 2)
+        registry = build_registry(source, api_key=params.get("apikey", ""),
+                                  csv_dir=params.get("csvdir", "./data"),
+                                  seed=int(params.get("seed", 42) or 42))
+        fetched = registry.get_ohlcv(symbol, timeframe, int(params.get("lookback", 750) or 750))
+        if "error" in fetched:
+            return 200, {"error": fetched["error"]}
+        s = fetched["_series"]
+        res = run_backtest(s, _ema_cross(fast, slow), commission_bps=comm, slippage_bps=slip)
+        ts_index = {t: i for i, t in enumerate(s.ts)}
+        trades = []
+        for t in res.trades:
+            trades.append({
+                "entry_i": ts_index.get(t.entry_ts), "exit_i": ts_index.get(t.exit_ts),
+                "entry": round(t.entry_price, 4), "exit": round(t.exit_price, 4),
+                "direction": t.direction, "pnl": round(t.pnl, 2), "return_pct": round(t.return_pct, 2),
+            })
+        bars = [{"t": s.ts[i].isoformat(), "o": s.open[i], "h": s.high[i],
+                 "l": s.low[i], "c": s.close[i]} for i in range(len(s))]
+        out = {
+            "symbol": symbol, "timeframe": timeframe, "params": {"fast": fast, "slow": slow},
+            "simulated": fetched["provenance"].get("simulated", False),
+            "bars": bars, "trades": trades,
+            "equity_curve": [round(x, 2) for x in res.equity_curve],
+            "metrics": res.metrics, "warnings": res.warnings,
+            "verdict": verdict(res.metrics, len(res.trades)),
+        }
+        rob = (params.get("robustness") or "none").strip()
+        if rob != "none":
+            from .robustness import (parameter_sensitivity, sub_period_analysis,
+                                     train_test_split, walk_forward)
+            factory = lambda p: _ema_cross(p["fast"], p["slow"])
+            grid = {"fast": [10, 20, 30], "slow": [50, 100, 200]}
+            if rob == "split":
+                out["robustness"] = train_test_split(s, _ema_cross(fast, slow))
+            elif rob == "walkforward":
+                out["robustness"] = walk_forward(s, factory, grid)
+            elif rob == "sensitivity":
+                out["robustness"] = parameter_sensitivity(s, factory, grid)
+            elif rob == "subperiods":
+                out["robustness"] = sub_period_analysis(s, _ema_cross(fast, slow))
+        return 200, out
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": f"{type(e).__name__}: {e}"}
+
+
 def build_scan_data(params: dict):
     """Run a screen over a universe with UI-selected filters."""
     symbols = [s.strip().upper() for s in (params.get("symbols") or "").split(",") if s.strip()]
@@ -184,6 +256,12 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/scan":
             params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             status, payload = build_scan_data(params)
+            self._send(status, json.dumps(payload, default=str).encode("utf-8"),
+                       "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api/backtest":
+            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            status, payload = build_backtest_data(params)
             self._send(status, json.dumps(payload, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
             return
@@ -276,6 +354,14 @@ DASHBOARD_HTML = r"""<!doctype html>
   tbody tr:hover{background:var(--panel2)}
   .flag{color:var(--amber);font-size:11px}
   .yes{color:var(--green)} .no{color:var(--muted)}
+  .verdict{padding:10px 14px;border-radius:9px;font-weight:600;margin:10px 0;border:1px solid var(--line)}
+  .metgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0}
+  .met{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+  .met .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  .met .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .btcanvas{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-top:10px}
+  #btPrice{width:100%;height:340px;display:block}
+  #btEquity{width:100%;height:170px;display:block}
 </style>
 </head>
 <body>
@@ -301,6 +387,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <div class="tabs">
   <button id="tabChart" class="active">Chart</button>
   <button id="tabScan">Scanner</button>
+  <button id="tabBt">Backtester</button>
   <button id="tabAnalysis">Analysis</button>
 </div>
 <div class="wrap">
@@ -330,6 +417,21 @@ DASHBOARD_HTML = r"""<!doctype html>
     <div id="scanResults"></div>
   </div>
 
+  <div id="btView" style="display:none">
+    <div class="scanctl">
+      <div class="fld"><label>Fast EMA</label><input id="btFast" value="20"></div>
+      <div class="fld"><label>Slow EMA</label><input id="btSlow" value="50"></div>
+      <div class="fld"><label>Commission bps</label><input id="btComm" value="1"></div>
+      <div class="fld"><label>Slippage bps</label><input id="btSlip" value="2"></div>
+      <div class="fld"><label>Robustness</label>
+        <select id="btRob"><option value="none">none</option><option value="split">out-of-sample split</option>
+        <option value="walkforward">walk-forward</option><option value="sensitivity">param sensitivity</option>
+        <option value="subperiods">sub-periods</option></select></div>
+      <button class="primary" id="btGo">Run backtest</button>
+    </div>
+    <div id="btResults"></div>
+  </div>
+
   <div id="analysisView" style="display:none"></div>
 </div>
 <script>
@@ -356,19 +458,20 @@ $('symbol').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
 $('go').addEventListener('click',load);
 $('tabChart').addEventListener('click',()=>showTab('chart'));
 $('tabScan').addEventListener('click',()=>showTab('scan'));
+$('tabBt').addEventListener('click',()=>showTab('bt'));
 $('tabAnalysis').addEventListener('click',()=>showTab('analysis'));
 $('scanGo').addEventListener('click',loadScan);
+$('btGo').addEventListener('click',loadBacktest);
 $('tfbar').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
   timeframe=b.dataset.tf; $('tfbar').querySelectorAll('button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active'); if(tab==='chart') loadChart(); }));
 
 let tab='chart';
 function showTab(t){tab=t;
-  $('tabChart').classList.toggle('active',t==='chart');
-  $('tabScan').classList.toggle('active',t==='scan');
-  $('tabAnalysis').classList.toggle('active',t==='analysis');
+  ['chart','scan','bt','analysis'].forEach(x=>$('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active',t===x));
   $('chartView').style.display=t==='chart'?'':'none';
   $('scanView').style.display=t==='scan'?'':'none';
+  $('btView').style.display=t==='bt'?'':'none';
   $('analysisView').style.display=t==='analysis'?'':'none';
   if(t==='chart' && !data) loadChart();
   if(t==='chart' && data) resize();
@@ -582,6 +685,74 @@ function renderScan(d){
   $('scanResults').innerHTML=h;
   $('scanResults').querySelectorAll('tr[data-sym]').forEach(tr=>tr.addEventListener('click',()=>{
     $('symbol').value=tr.dataset.sym; data=null; showTab('chart'); loadChart();}));
+}
+
+// ---- backtester ----
+async function loadBacktest(){
+  const c=controls();
+  const p=new URLSearchParams({symbol:c.symbol,source:c.source,apikey:c.apikey,csvdir:c.csvdir,
+    timeframe:c.timeframe,fast:$('btFast').value,slow:$('btSlow').value,
+    commission_bps:$('btComm').value,slippage_bps:$('btSlip').value,robustness:$('btRob').value,lookback:'750'});
+  setStatus('Backtesting '+c.symbol+' …');
+  try{const r=await fetch('/api/backtest?'+p);const d=await r.json();
+    if(d.error){setStatus('Error: '+d.error,true);return;} setStatus(''); renderBacktest(d);
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+function vColor(v){v=v||'';return v.includes('plausibly real')?C.green:(v.includes('no edge')?C.red:C.amber);}
+function met(l,v){return `<div class="met"><div class="l">${l}</div><div class="v">${v}</div></div>`;}
+function renderBacktest(d){
+  const m=d.metrics||{};
+  const sim=d.simulated?' <span class="sim">SIMULATED</span>':'';
+  let h=`<div class="verdict" style="border-color:${vColor(d.verdict)};color:${vColor(d.verdict)}">Verdict: ${esc(d.verdict)}</div>`;
+  h+=`<div class="hint">${esc(d.symbol)} · EMA ${d.params.fast}/${d.params.slow} · ${m.num_trades} trades${sim}</div>`;
+  h+='<div class="metgrid">'+
+    met('Total return',m.total_return_pct+'%')+met('CAGR',m.cagr_pct+'%')+
+    met('Max drawdown',m.max_drawdown_pct+'%')+met('Sharpe',m.sharpe)+
+    met('Win rate',m.win_rate_pct+'%')+met('Profit factor',m.profit_factor==null?'∞':m.profit_factor)+
+    met('Trades',m.num_trades)+met('Exposure',m.exposure_pct+'%')+'</div>';
+  (d.warnings||[]).forEach(w=>h+=`<div class="hint" style="color:${C.amber}">! ${esc(w)}</div>`);
+  h+='<canvas id="btPrice" class="btcanvas"></canvas><canvas id="btEquity" class="btcanvas"></canvas>';
+  if(d.robustness){const rb=d.robustness;
+    h+=`<div class="grow" style="margin-top:12px"><h3>Robustness</h3><div class="kv">`+
+       (rb.assessment?esc(rb.assessment):esc(JSON.stringify(rb).slice(0,300)))+`</div></div>`;}
+  $('btResults').innerHTML=h;
+  drawBtPrice($('btPrice'),d.bars,d.trades);
+  drawEquity($('btEquity'),d.equity_curve);
+}
+function sizeCanvas(cv){const dpr=window.devicePixelRatio||1;const r=cv.getBoundingClientRect();
+  cv.width=r.width*dpr;cv.height=r.height*dpr;const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);
+  return {x,W:r.width,H:r.height};}
+function drawBtPrice(cv,bars,trades){const {x,W,H}=sizeCanvas(cv);x.clearRect(0,0,W,H);
+  if(!bars.length)return;const PADL=6,PADR=58,PADT=8,PADB=8;
+  let lo=1e18,hi=-1e18;bars.forEach(b=>{lo=Math.min(lo,b.l);hi=Math.max(hi,b.h);});
+  const pad=(hi-lo)*0.05||1;lo-=pad;hi+=pad;
+  const bw=(W-PADL-PADR)/bars.length;
+  const xi=i=>PADL+i*bw+bw/2, y=p=>PADT+(hi-p)/(hi-lo)*(H-PADT-PADB);
+  x.strokeStyle=C.line;x.fillStyle=C.muted;x.font='10px sans-serif';
+  for(let k=0;k<=4;k++){const p=hi-(hi-lo)*k/4,yy=y(p);x.globalAlpha=.35;x.beginPath();x.moveTo(PADL,yy);x.lineTo(W-PADR,yy);x.stroke();x.globalAlpha=1;x.fillText(p.toFixed(2),W-PADR+3,yy+3);}
+  for(let i=0;i<bars.length;i++){const b=bars[i],up=b.c>=b.o;x.strokeStyle=up?C.green:C.red;x.fillStyle=up?C.green:C.red;
+    x.lineWidth=1;x.beginPath();x.moveTo(xi(i),y(b.h));x.lineTo(xi(i),y(b.l));x.stroke();
+    const y1=y(b.o),y2=y(b.c);let hh=Math.abs(y2-y1);if(hh<1)hh=1;x.fillRect(xi(i)-Math.max(1,bw*0.35),Math.min(y1,y2),Math.max(1.5,bw*0.7),hh);}
+  (trades||[]).forEach(t=>{if(t.entry_i==null)return;const win=t.pnl>=0;const col=win?C.green:C.red;
+    const ex=xi(t.entry_i),ey=y(t.entry);x.fillStyle=col;x.beginPath();
+    if(t.direction==='long'){x.moveTo(ex,ey+9);x.lineTo(ex-4,ey+16);x.lineTo(ex+4,ey+16);}else{x.moveTo(ex,ey-9);x.lineTo(ex-4,ey-16);x.lineTo(ex+4,ey-16);}
+    x.closePath();x.fill();
+    if(t.exit_i!=null){const xx=xi(t.exit_i),xy=y(t.exit);x.strokeStyle=col;x.globalAlpha=.5;x.lineWidth=1;x.setLineDash([3,2]);
+      x.beginPath();x.moveTo(ex,ey);x.lineTo(xx,xy);x.stroke();x.setLineDash([]);x.globalAlpha=1;
+      x.fillStyle=col;x.fillRect(xx-2,xy-2,4,4);}});
+}
+function drawEquity(cv,eq){const {x,W,H}=sizeCanvas(cv);x.clearRect(0,0,W,H);
+  if(!eq||!eq.length)return;const PADL=6,PADR=58,PADT=10,PADB=8;
+  let lo=Math.min(...eq),hi=Math.max(...eq);const pad=(hi-lo)*0.05||1;lo-=pad;hi+=pad;
+  const xi=i=>PADL+i*(W-PADL-PADR)/(eq.length-1||1), y=p=>PADT+(hi-p)/(hi-lo)*(H-PADT-PADB);
+  x.strokeStyle=C.line;x.fillStyle=C.muted;x.font='10px sans-serif';
+  for(let k=0;k<=3;k++){const p=hi-(hi-lo)*k/3,yy=y(p);x.globalAlpha=.35;x.beginPath();x.moveTo(PADL,yy);x.lineTo(W-PADR,yy);x.stroke();x.globalAlpha=1;x.fillText(Math.round(p).toLocaleString(),W-PADR+3,yy+3);}
+  // drawdown fill under a running peak
+  let peak=eq[0];x.fillStyle='rgba(248,81,73,.10)';x.beginPath();x.moveTo(xi(0),y(eq[0]));
+  for(let i=0;i<eq.length;i++){peak=Math.max(peak,eq[i]);}
+  x.strokeStyle=C.accent;x.lineWidth=1.6;x.beginPath();
+  eq.forEach((v,i)=>{const xx=xi(i),yy=y(v);if(i===0)x.moveTo(xx,yy);else x.lineTo(xx,yy);});x.stroke();
+  x.fillStyle=C.muted;x.fillText('equity',PADL+2,PADT+2);
 }
 
 toggleSourceFields(); loadChart();

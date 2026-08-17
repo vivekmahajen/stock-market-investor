@@ -18,9 +18,10 @@ Legend: `[ ]` planned · `[~]` partial · `[x]` done.
       min rel-vol, min 3m return), run `run_screen`, results grid ranked by
       composite score with metrics + liquidity flags; click a row to open the
       chart. API: `/api/scan`.
-- [ ] **3. Backtester** — pick a strategy + params, run the cost-aware backtest,
-      show the equity curve and trade markers on the chart, metrics, and the
-      robustness verdict (walk-forward / sensitivity).
+- [x] **3. Backtester** — EMA-cross strategy with params + costs; verdict banner,
+      metrics grid, **trade markers on the price chart** (entry triangles + win/loss
+      lines to exits), **equity curve**, and an optional robustness check
+      (split / walk-forward / sensitivity / sub-periods). API: `/api/backtest`.
 - [ ] **4. Alerts** — create / list / check alerts from the UI (dynamic conditions),
       backed by the alert store.
 - [ ] **5. Watchlist** — multi-symbol watchlist scored and ranked (from `watch`),

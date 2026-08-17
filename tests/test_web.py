@@ -104,6 +104,35 @@ def test_dashboard_has_scanner_tab():
     assert "tabScan" in DASHBOARD_HTML and "/api/scan" in DASHBOARD_HTML
 
 
+def test_build_backtest_data_shape():
+    from atlas.web import build_backtest_data
+    status, d = build_backtest_data({"symbol": "AAA", "source": "synthetic",
+                                     "fast": "20", "slow": "50", "lookback": "750"})
+    assert status == 200
+    assert "metrics" in d and "verdict" in d
+    assert len(d["equity_curve"]) > 0 and len(d["bars"]) > 0
+    for t in d["trades"]:
+        assert "entry_i" in t and "direction" in t and "pnl" in t
+
+
+def test_build_backtest_data_robustness():
+    from atlas.web import build_backtest_data
+    _, d = build_backtest_data({"symbol": "AAA", "source": "synthetic",
+                               "robustness": "sensitivity", "lookback": "750"})
+    assert "robustness" in d and "assessment" in d["robustness"]
+
+
+def test_build_backtest_data_requires_symbol():
+    from atlas.web import build_backtest_data
+    status, d = build_backtest_data({"source": "synthetic"})
+    assert status == 400 and "error" in d
+
+
+def test_dashboard_has_backtester_tab():
+    assert "tabBt" in DASHBOARD_HTML and "/api/backtest" in DASHBOARD_HTML
+    assert "btEquity" in DASHBOARD_HTML  # equity-curve canvas present
+
+
 def test_run_analysis_with_events_flag_via_synthetic_notes():
     # Synthetic provider has no earnings feed -> graceful note, not a crash.
     status, out = run_analysis({"symbol": "AAA", "source": "synthetic", "events": "1"})
