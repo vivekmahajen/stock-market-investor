@@ -76,6 +76,34 @@ def test_build_chart_data_requires_symbol():
     assert status == 400 and "error" in d
 
 
+def test_build_scan_data_ranks_results():
+    from atlas.web import build_scan_data
+    status, d = build_scan_data({"symbols": "AAA,BBB,CCC,DDD,EEE", "source": "synthetic"})
+    assert status == 200
+    scores = [r["composite_score"] for r in d["results"]]
+    assert scores == sorted(scores, reverse=True)
+    assert "metrics" in d["results"][0] and "liquidity_flags" in d["results"][0]
+
+
+def test_build_scan_data_filter_narrows():
+    from atlas.web import build_scan_data
+    _, allr = build_scan_data({"symbols": "AAA,BBB,CCC,DDD,EEE", "source": "synthetic"})
+    _, filt = build_scan_data({"symbols": "AAA,BBB,CCC,DDD,EEE", "source": "synthetic", "above_ema50": "1"})
+    assert filt["matched"] <= allr["matched"]
+    for r in filt["results"]:
+        assert r["metrics"]["above_ema50"] is True
+
+
+def test_build_scan_data_requires_symbols():
+    from atlas.web import build_scan_data
+    status, d = build_scan_data({"source": "synthetic"})
+    assert status == 400 and "error" in d
+
+
+def test_dashboard_has_scanner_tab():
+    assert "tabScan" in DASHBOARD_HTML and "/api/scan" in DASHBOARD_HTML
+
+
 def test_run_analysis_with_events_flag_via_synthetic_notes():
     # Synthetic provider has no earnings feed -> graceful note, not a crash.
     status, out = run_analysis({"symbol": "AAA", "source": "synthetic", "events": "1"})

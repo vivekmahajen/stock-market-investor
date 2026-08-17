@@ -14,9 +14,10 @@ Legend: `[ ]` planned · `[~]` partial · `[x]` done.
       overlays drawn on the chart: candles, EMA20/50, Bollinger, VWAP, S/R levels,
       auto trendlines, Fibonacci retracements, bull/bear pattern markers, volume.
       Tabs: Chart | Analysis. API: `/api/chart`.
-- [ ] **2. Scanner** — visual screener: pick filters, run `run_screen`, results
-      grid with the composite score and liquidity flags; click a row to load the
-      chart.
+- [x] **2. Scanner** — visual screener: filter a universe (above-EMA50, RSI band,
+      min rel-vol, min 3m return), run `run_screen`, results grid ranked by
+      composite score with metrics + liquidity flags; click a row to open the
+      chart. API: `/api/scan`.
 - [ ] **3. Backtester** — pick a strategy + params, run the cost-aware backtest,
       show the equity curve and trade markers on the chart, metrics, and the
       robustness verdict (walk-forward / sensitivity).

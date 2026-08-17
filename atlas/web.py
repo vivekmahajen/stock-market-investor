@@ -120,6 +120,39 @@ def build_chart_data(params: dict):
         return 500, {"error": f"{type(e).__name__}: {e}"}
 
 
+def build_scan_data(params: dict):
+    """Run a screen over a universe with UI-selected filters."""
+    symbols = [s.strip().upper() for s in (params.get("symbols") or "").split(",") if s.strip()]
+    if not symbols:
+        return 400, {"error": "symbols required"}
+    source = (params.get("source") or "synthetic").strip()
+    try:
+        registry = build_registry(source, api_key=params.get("apikey", ""),
+                                  csv_dir=params.get("csvdir", "./data"),
+                                  seed=int(params.get("seed", 42) or 42))
+        filters = []
+        if _truthy(params.get("above_ema50")):
+            filters.append({"field": "above_ema50", "op": "==", "value": True})
+
+        def numf(pname, field, op):
+            v = params.get(pname)
+            if v not in (None, ""):
+                try:
+                    filters.append({"field": field, "op": op, "value": float(v)})
+                except ValueError:
+                    pass
+
+        numf("rsi_min", "rsi14", ">=")
+        numf("rsi_max", "rsi14", "<=")
+        numf("rvol_min", "rvol", ">=")
+        numf("adv_min", "adv_dollar", ">=")
+        numf("ret3m_min", "ret_3m_pct", ">=")
+        res = registry.run_screen(symbols, filters=filters, limit=int(params.get("limit", 50) or 50))
+        return 200, res
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": f"{type(e).__name__}: {e}"}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # quieter console
         pass
@@ -145,6 +178,12 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/chart":
             params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             status, payload = build_chart_data(params)
+            self._send(status, json.dumps(payload, default=str).encode("utf-8"),
+                       "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api/scan":
+            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            status, payload = build_scan_data(params)
             self._send(status, json.dumps(payload, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
             return
@@ -224,6 +263,19 @@ DASHBOARD_HTML = r"""<!doctype html>
   .kv{color:var(--muted);font-size:13px;line-height:1.7}
   .hint{color:var(--muted);font-size:12px}
   .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px;margin:2px}
+  .scanctl{display:flex;gap:10px;flex-wrap:wrap;align-items:end;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .fld{display:flex;flex-direction:column;gap:3px}
+  .fld label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .fld input{width:90px}
+  .fld input#scanSymbols{width:280px}
+  table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;cursor:default}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--panel2)}
+  .flag{color:var(--amber);font-size:11px}
+  .yes{color:var(--green)} .no{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -248,6 +300,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 </header>
 <div class="tabs">
   <button id="tabChart" class="active">Chart</button>
+  <button id="tabScan">Scanner</button>
   <button id="tabAnalysis">Analysis</button>
 </div>
 <div class="wrap">
@@ -260,6 +313,21 @@ DASHBOARD_HTML = r"""<!doctype html>
       <div id="readout"></div>
     </div>
     <div class="hint" id="chartmeta" style="margin-top:8px"></div>
+  </div>
+
+  <div id="scanView" style="display:none">
+    <div class="scanctl">
+      <div class="fld"><label>Universe (symbols)</label>
+        <input id="scanSymbols" value="AAA,BBB,CCC,DDD,EEE,FFF,GGG,HHH"></div>
+      <div class="fld"><label>Above EMA50</label>
+        <select id="fAboveEma"><option value="">any</option><option value="1">yes</option></select></div>
+      <div class="fld"><label>RSI min</label><input id="fRsiMin" placeholder="e.g. 40"></div>
+      <div class="fld"><label>RSI max</label><input id="fRsiMax" placeholder="e.g. 70"></div>
+      <div class="fld"><label>Min rel-vol</label><input id="fRvol" placeholder="e.g. 1.2"></div>
+      <div class="fld"><label>Min 3m ret %</label><input id="fRet3m" placeholder="e.g. 0"></div>
+      <button class="primary" id="scanGo">Scan</button>
+    </div>
+    <div id="scanResults"></div>
   </div>
 
   <div id="analysisView" style="display:none"></div>
@@ -287,7 +355,9 @@ $('source').addEventListener('change',toggleSourceFields);
 $('symbol').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
 $('go').addEventListener('click',load);
 $('tabChart').addEventListener('click',()=>showTab('chart'));
+$('tabScan').addEventListener('click',()=>showTab('scan'));
 $('tabAnalysis').addEventListener('click',()=>showTab('analysis'));
+$('scanGo').addEventListener('click',loadScan);
 $('tfbar').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
   timeframe=b.dataset.tf; $('tfbar').querySelectorAll('button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active'); if(tab==='chart') loadChart(); }));
@@ -295,10 +365,13 @@ $('tfbar').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>
 let tab='chart';
 function showTab(t){tab=t;
   $('tabChart').classList.toggle('active',t==='chart');
+  $('tabScan').classList.toggle('active',t==='scan');
   $('tabAnalysis').classList.toggle('active',t==='analysis');
   $('chartView').style.display=t==='chart'?'':'none';
+  $('scanView').style.display=t==='scan'?'':'none';
   $('analysisView').style.display=t==='analysis'?'':'none';
   if(t==='chart' && !data) loadChart();
+  if(t==='chart' && data) resize();
   if(t==='analysis') loadAnalysis();
 }
 function setStatus(t,err){const s=$('status');s.textContent=t||'';s.className=err?'err':'';}
@@ -476,6 +549,41 @@ function renderAnalysis(d){
   h+=`<div class="hint" style="margin-top:12px">${esc(d.disclaimer||'')}</div>`;
   $('analysisView').innerHTML=h;
 }
+// ---- scanner ----
+async function loadScan(){
+  const syms=$('scanSymbols').value.trim();
+  if(!syms){setStatus('Enter symbols to scan.',true);return;}
+  const c=controls();
+  const p=new URLSearchParams({symbols:syms,source:c.source,apikey:c.apikey,csvdir:c.csvdir});
+  if($('fAboveEma').value)p.set('above_ema50','1');
+  const map={fRsiMin:'rsi_min',fRsiMax:'rsi_max',fRvol:'rvol_min',fRet3m:'ret3m_min'};
+  for(const id in map){if($(id).value)p.set(map[id],$(id).value);}
+  setStatus('Scanning '+syms.split(',').length+' symbols …');
+  try{const r=await fetch('/api/scan?'+p);const d=await r.json();
+    if(d.error){setStatus('Error: '+d.error,true);return;} setStatus(''); renderScan(d);
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+function num(v){return v==null?'–':(typeof v==='number'?v.toLocaleString(undefined,{maximumFractionDigits:2}):v);}
+function renderScan(d){
+  const rows=d.results||[];
+  const sim=d.simulated?' <span class="sim">SIMULATED</span>':'';
+  let h=`<div class="hint" style="margin-bottom:8px">Matched ${d.matched} of ${(d.results||[]).length+((d.errors||[]).length)} · ranked by composite score${sim}</div>`;
+  if(!rows.length){h+='<div class="kv">No matches. Loosen the filters.</div>';$('scanResults').innerHTML=h;return;}
+  h+=`<table><thead><tr><th>Symbol</th><th>Score</th><th>Price</th><th>RSI</th><th>Rel-vol</th>
+    <th>1m %</th><th>3m %</th><th>ADV $</th><th>&gt;EMA50</th><th>Flags</th></tr></thead><tbody>`;
+  rows.forEach(r=>{const m=r.metrics||{};
+    const flags=(r.liquidity_flags||[]).length?`<span class="flag">${r.liquidity_flags.length}⚠</span>`:'';
+    h+=`<tr data-sym="${esc(r.symbol)}"><td><b>${esc(r.symbol)}</b></td><td>${num(r.composite_score)}</td>
+      <td>${num(m.price)}</td><td>${num(m.rsi14)}</td><td>${num(m.rvol)}</td>
+      <td>${num(m.ret_1m_pct)}</td><td>${num(m.ret_3m_pct)}</td><td>${num(m.adv_dollar)}</td>
+      <td class="${m.above_ema50?'yes':'no'}">${m.above_ema50?'✓':'·'}</td>
+      <td title="${esc((r.liquidity_flags||[]).join('; '))}">${flags}</td></tr>`;});
+  h+='</tbody></table><div class="hint" style="margin-top:8px">Click a row to open it on the chart.</div>';
+  $('scanResults').innerHTML=h;
+  $('scanResults').querySelectorAll('tr[data-sym]').forEach(tr=>tr.addEventListener('click',()=>{
+    $('symbol').value=tr.dataset.sym; data=null; showTab('chart'); loadChart();}));
+}
+
 toggleSourceFields(); loadChart();
 </script>
 </body>
