@@ -29,6 +29,7 @@ from .backtest import run_backtest, verdict
 from .robustness import (parameter_sensitivity, sub_period_analysis,
                          train_test_split, walk_forward)
 from .calibration import CalibrationLog, SignalRecord
+from .journal import SignalJournal
 from .events import build_event_risk, parse_earnings_csv
 from .fundamentals import fundamental_subscore, sentiment_subscore
 from .scoring import (probabilistic_framing, score_forward_study,
@@ -101,6 +102,7 @@ __all__ = [
     "AlertStore",
     "CalibrationLog",
     "SignalRecord",
+    "SignalJournal",
     "ToolRegistry",
     "DataProvider",
     "SyntheticProvider",

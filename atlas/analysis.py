@@ -468,10 +468,12 @@ def propose_signal(
         if "earnings" in er:
             events = build_event_risk(er["earnings"], series.asof.date())
 
+    asof = series.asof.isoformat() if series.asof else None
     if direction == "flat":
         return {
             "symbol": symbol,
             "direction": "flat",
+            "asof": asof,
             "reason": f"No clean setup: regime={regime}, technical={tech}, confluence={conf_score}, "
                       f"patterns bull/bear={bull}/{bear}. Silence is a valid output.",
             "regime": regime,
@@ -504,9 +506,11 @@ def propose_signal(
     catalyst = (f"invalid after earnings on {events[0]['date']}" if events
                 else f"thesis expires at the end of the {horizon} window")
 
-    return build_signal(
+    sig = build_signal(
         symbol, entry, stop, targets, direction, account_equity, risk_pct, horizon, events,
         thesis=thesis, confidence=confidence, confidence_drivers=drivers,
         biggest_risk=biggest_risk, invalidation=invalidation,
         catalyst_or_expiry=catalyst, regime=regime, min_r=min_r,
     )
+    sig["asof"] = asof
+    return sig
