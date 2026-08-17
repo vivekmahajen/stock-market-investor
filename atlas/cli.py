@@ -121,6 +121,8 @@ def main(argv=None) -> int:
     psc.add_argument("--benchmark", default=None)
     psc.add_argument("--fundamentals", action="store_true")
     psc.add_argument("--sentiment", action="store_true")
+    psc.add_argument("--study", action="store_true",
+                     help="add in-sample probabilistic framing by score band")
 
     pse = sub.add_parser("seasonality", parents=[common], help="calendar-bucketed return stats")
     pse.add_argument("symbol")
@@ -259,12 +261,13 @@ def main(argv=None) -> int:
     elif args.cmd == "score":
         full = analyze(args.symbol, registry=reg, timeframe=args.timeframe, lookback=args.lookback,
                        benchmark=args.benchmark, with_fundamentals=args.fundamentals,
-                       with_sentiment=args.sentiment)
+                       with_sentiment=args.sentiment, with_score_study=args.study)
         if "error" in full:
             out = full
         else:
             out = {k: full[k] for k in ("symbol", "atlas_score", "subscores", "score_label",
-                                        "score_horizon", "top_contributors", "regime", "notes",
+                                        "score_horizon", "top_contributors", "score_dynamics",
+                                        "score_probabilistic", "regime", "notes",
                                         "data_is_simulated", "disclaimer") if k in full}
     elif args.cmd == "seasonality":
         fetched = reg.get_ohlcv(args.symbol, "1d", args.lookback)

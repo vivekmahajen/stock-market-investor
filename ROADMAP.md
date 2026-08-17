@@ -125,11 +125,13 @@ Built CLI: analyze, signal, backtest, screen, portfolio, option, serve.
 
 All support `--format text`.
 
-## I. Scoring depth (§10) — `atlas/scoring.py`
+## I. Scoring depth (§10) — `atlas/scoring.py` ✅ DONE
 Built: five-factor blend, attribution, adjustable weights, label, horizon.
 
-- [ ] I1. probabilistic framing — historical outperformance by score band + regime (needs a score backtest)
-- [ ] I2. explicit "what would change the score" output
+- [x] I1. `score_forward_study` / `probabilistic_framing` — in-sample score-band vs forward-return study (positive-return or beat-benchmark), sample-sized and labelled in-sample
+- [x] I2. `what_would_change` — factor moves needed to upgrade/downgrade the label + biggest drag
+
+Surfaced in the analyze envelope (`score_dynamics`, `score_probabilistic`); CLI `score --study`.
 
 ## J. Calibration wiring (Appendix B)
 Built: `CalibrationLog` (Brier, ECE, reliability buckets).
