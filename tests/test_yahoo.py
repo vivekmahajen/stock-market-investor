@@ -55,6 +55,29 @@ def test_null_rows_are_skipped_not_guessed():
     assert len(s) == 2 and p.last_skipped_rows == 1  # the null middle row dropped
 
 
+def test_uses_adjusted_close_to_remove_split_jump():
+    # Raw close halves on a 2:1 split (day 3); adjclose is continuous. The parsed
+    # series must follow adjclose, so no fake ~-50% return survives.
+    import math
+    payload = json.dumps({"chart": {"error": None, "result": [{
+        "meta": {},
+        "timestamp": [1577836800, 1577923200, 1578009600, 1578096000],
+        "indicators": {
+            "quote": [{"open": [200, 202, 100, 101], "high": [201, 203, 101, 102],
+                       "low": [199, 201, 99, 100], "close": [200, 202, 100, 101],
+                       "volume": [1, 2, 3, 4]}],
+            "adjclose": [{"adjclose": [100, 101, 100, 101]}],
+        },
+    }]}})
+    p, _ = _provider(payload)
+    s = p.get_ohlcv("AAPL", "1d", 0)
+    closes = list(s.close)
+    assert closes == [100.0, 101.0, 100.0, 101.0]  # adjusted, continuous
+    max_move = max(abs(math.log(closes[i] / closes[i - 1])) for i in range(1, len(closes)))
+    assert max_move < 0.05  # the raw -50% split jump is gone; OHLC back-adjusted too
+    assert s.open[0] == 100.0  # open back-adjusted by adjclose/close = 100/200
+
+
 def test_error_envelope_raises():
     p, _ = _provider(_chart(None, None, None, None, None, None,
                             error={"code": "Not Found", "description": "No data found"}))

@@ -108,6 +108,19 @@ def test_forecast_flat_history_rejected():
     assert "error" in fc  # zero volatility => no distribution
 
 
+def test_forecast_flags_implausible_volatility():
+    # A series with a fake split jump (unadjusted) => implausible vol => a loud
+    # data_warning instead of a confident-but-nonsensical distribution.
+    closes = _synthetic_closes(200)
+    for i in range(150, 200):  # a raw 10:1 split at day 150 (all later bars /10)
+        closes[i] = closes[i] / 10.0
+    fc = forecast_price(closes, horizon_days=30, with_skill=False)
+    assert fc["data_warning"] is not None
+    assert "split" in fc["data_warning"]
+    # A clean series carries no such warning.
+    assert forecast_price(_synthetic_closes(200), 30, with_skill=False)["data_warning"] is None
+
+
 def test_forecast_refuses_under_60_bars():
     fc = forecast_price(_synthetic_closes(50), horizon_days=30)
     assert "error" in fc and "60" in fc["error"]

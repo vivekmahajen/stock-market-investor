@@ -300,6 +300,16 @@ def forecast_price(
 
     proj = _project(ref, fit["drift"], fit["sigma"], steps)
     band_width_pct = (proj["interval_80"][1] - proj["interval_80"][0]) / ref
+    annualized_vol_pct = fit["sigma"] * math.sqrt(252) * 100.0
+    # A megacap almost never sustains >150% annualized volatility; when the
+    # estimate does, the input prices are almost certainly not split-adjusted
+    # (an unadjusted split day looks like a ±90% return). Flag it loudly rather
+    # than emit a confident-looking but nonsensical distribution.
+    data_warning = None
+    if annualized_vol_pct > 150.0:
+        data_warning = (f"annualized volatility {annualized_vol_pct:.0f}% is implausibly high — "
+                        f"input prices may not be adjusted for splits/dividends; treat this "
+                        f"forecast as unreliable.")
     result: Dict[str, object] = {
         "method": method,
         "horizon_days": horizon_days,
@@ -314,6 +324,7 @@ def forecast_price(
         "mean_return": proj["mean_return"],
         "band_width_80_pct": band_width_pct,
         "uninformative": band_width_pct > 0.5,  # §21: flag near-useless horizons
+        "data_warning": data_warning,
         "drift_capped": proj["drift_capped"],
         "inputs": {
             "window_bars": eff_window,

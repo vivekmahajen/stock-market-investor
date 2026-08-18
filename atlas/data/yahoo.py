@@ -117,12 +117,20 @@ class YahooProvider:
 
         res = results[0]
         stamps = res.get("timestamp") or []
-        quote = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+        indicators = res.get("indicators") or {}
+        quote = (indicators.get("quote") or [{}])[0]
         opens = quote.get("open") or []
         highs = quote.get("high") or []
         lows = quote.get("low") or []
         closes = quote.get("close") or []
         vols = quote.get("volume") or []
+        # Yahoo's `close` is UNADJUSTED — every stock split shows up as a huge
+        # one-day jump that would explode a volatility/returns model. The
+        # `adjclose` series is split- and dividend-adjusted (continuous), so we
+        # back-adjust OHLC by the per-bar factor adjclose/close and use it as the
+        # canonical price. This is the single most important correctness choice
+        # for the forecaster: without it, split days masquerade as ±90% returns.
+        adjclose = ((indicators.get("adjclose") or [{}])[0].get("adjclose")) or []
         if not stamps or not closes:
             raise RuntimeError(f"Yahoo payload for '{symbol}' had no price series.")
 
@@ -135,11 +143,14 @@ class YahooProvider:
                 if None in (o, h, l, c):
                     skipped += 1  # holiday/halt row Yahoo pads with nulls
                     continue
+                a = adjclose[i] if i < len(adjclose) and adjclose[i] is not None else c
+                factor = (a / c) if c else 1.0  # split/dividend back-adjust factor
                 dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                 if not intraday:
                     dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
                 v = vols[i] if i < len(vols) and vols[i] is not None else 0.0
-                bars.append(Bar(dt, float(o), float(h), float(l), float(c), float(v)))
+                bars.append(Bar(dt, float(o) * factor, float(h) * factor,
+                                float(l) * factor, float(a), float(v)))
             except (IndexError, TypeError, ValueError):
                 skipped += 1
                 continue
