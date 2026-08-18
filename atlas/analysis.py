@@ -82,6 +82,8 @@ def analyze(
     with_sentiment: bool = False,
     with_events: bool = False,
     with_score_study: bool = False,
+    series: Optional[OHLCV] = None,
+    provenance: Optional[dict] = None,
 ) -> dict:
     """Full workup for ``analyze <symbol>`` producing the Section 15 envelope.
 
@@ -89,12 +91,23 @@ def analyze(
     (each an API request) that fill the fundamental and sentiment sub-scores.
     Left off, those sub-scores are ``None`` — the honest default, not a
     fabricated value.
+
+    Pass ``series`` (with its ``provenance``) to analyse bars the caller already
+    fetched. Batch callers such as the daily report use this so a ten-symbol run
+    costs ten data requests, not twenty — which matters on a rate-limited feed.
     """
     registry = registry or ToolRegistry()
-    fetched = registry.get_ohlcv(symbol, timeframe, lookback)
-    if "error" in fetched:
-        return {"symbol": symbol, "error": fetched["error"]}
-    series: OHLCV = fetched["_series"]
+    if series is None:
+        fetched = registry.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in fetched:
+            return {"symbol": symbol, "error": fetched["error"]}
+        series = fetched["_series"]
+    else:
+        fetched = {
+            "asof": series.asof.isoformat() if series.asof else None,
+            "provenance": dict(provenance or {"tool": "get_ohlcv", "symbol": symbol,
+                                              "note": "series supplied by the caller"}),
+        }
 
     regime = classify_regime(series)
     conf = confluence_score(series)

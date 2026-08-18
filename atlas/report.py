@@ -263,9 +263,89 @@ def format_explain(out: dict) -> str:
     return "\n".join(L)
 
 
+def format_forecast(out: dict) -> str:
+    """Horizon forecast: the distribution, its inputs, and its measured skill."""
+    if out.get("error"):
+        return f"FORECAST ERROR for {out.get('symbol','?')}: {out['error']}"
+    if "results" in out:  # compare_methods envelope
+        L = [_hr("="), f"  FORECAST METHOD COMPARISON — {out.get('symbol','?')} "
+                       f"({out.get('horizon_days')}d)", _hr("=")]
+        L.append(f"  {'METHOD':<10}{'MAPE%':>9}{'vs NAIVE':>10}{'DIR%':>8}{'COV80%':>9}{'N':>6}")
+        for m in out.get("ranked_by_mape", []):
+            r = out["results"][m]
+            skill = r.get("skill_vs_naive")
+            L.append(f"  {m:<10}{r.get('mape_pct'):>9}"
+                     f"{('—' if skill is None else f'{skill*100:+.1f}%'):>10}"
+                     f"{str(r.get('directional_accuracy_pct')):>8}"
+                     f"{str(r.get('coverage_80_pct')):>9}{r.get('samples'):>6}")
+        ranked = out.get("ranked_by_mape") or []
+        best = ranked[0] if ranked else None
+        if best == "naive":
+            L.append("")
+            L.append("  Nothing beat the random walk over these origins. On this symbol and horizon "
+                     "the honest forecast is 'roughly today's price', with the interval doing the work.")
+        elif best:
+            L.append("")
+            L.append(f"  Best: {best} — {out['results'][best].get('verdict','')}")
+        return "\n".join(L)
+
+    L: List[str] = [_hr("=")]
+    sim = "  [SIMULATED DATA]" if out.get("simulated") else ""
+    L.append(f"  {out['symbol']} — {out['horizon_days']}d forecast "
+             f"({out['method']}/{out['model_version']}){sim}")
+    L.append(f"  from {out.get('asof','?')}  ->  target {out.get('target_date','?')} "
+             f"({out.get('horizon_bars')} trading bars)")
+    L.append(_hr("="))
+    L.append(f"  last close      {out['last_close']}")
+    L.append(f"  forecast        {out['forecast_price']}   ({out['forecast_return_pct']:+.2f}%)"
+             f"   <- {out['forecast_price_basis']}")
+    L.append(f"  mean of dist    {out['expected_price']}")
+    L.append(f"  80% interval    {out['interval_80']['low']} .. {out['interval_80']['high']}"
+             f"   (width {out['interval_80_width_pct']}% of price)")
+    L.append(f"  95% interval    {out['interval_95']['low']} .. {out['interval_95']['high']}")
+    if out.get("prob_up") is not None:
+        L.append(f"  P(close above today's price) {out['prob_up']:.1%}")
+    c = out.get("components", {})
+    L.append("")
+    L.append("  MODEL INPUTS")
+    L.append(f"    annualised volatility {c.get('sigma_annual_pct')}%   "
+             f"horizon sigma {c.get('sigma_horizon')}")
+    L.append(f"    raw drift {c.get('mu_raw_annual_pct')}%/yr shrunk by "
+             f"{c.get('shrinkage_applied')} -> horizon drift {c.get('mu_horizon')}")
+    L.append(f"    source: {c.get('drift_source')}   sample {c.get('sample_bars')} bars")
+    sk = out.get("skill")
+    if sk:
+        L.append("")
+        L.append("  MEASURED SKILL (walk-forward on this symbol's own history)")
+        if sk.get("samples"):
+            sv = sk.get("skill_vs_naive")
+            skill_txt = "n/a" if sv is None else f"{sv * 100:+.1f}%"
+            L.append(f"    MAPE {sk['mape_pct']}%  vs naive {sk['naive_mape_pct']}%  "
+                     f"-> skill {skill_txt}")
+            L.append(f"    direction right {sk.get('directional_accuracy_pct')}%   "
+                     f"80% coverage {sk.get('coverage_80_pct')}%   "
+                     f"95% coverage {sk.get('coverage_95_pct')}%   n={sk['samples']}")
+        L.append(f"    {sk.get('verdict', sk.get('note',''))}")
+        for w in sk.get("warnings", []):
+            L.append(f"    ! {w}")
+    for w in out.get("warnings", []):
+        L.append(f"  ! {w}")
+    L.append("")
+    L.append("  " + out.get("disclaimer", ""))
+    return "\n".join(L)
+
+
+def format_daily(out: dict) -> str:
+    from .daily import render_daily_text
+
+    return render_daily_text(out)
+
+
 def render(command: str, out: dict) -> str:
     """Dispatch to the right formatter; unknown shapes fall back to nothing."""
     return {
+        "forecast": format_forecast,
+        "daily": format_daily,
         "analyze": format_analysis,
         "signal": format_signal,
         "backtest": format_backtest,

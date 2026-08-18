@@ -7,3 +7,6 @@ venv/
 build/
 dist/
 .DS_Store
+
+# ATLAS prediction store (created by `atlas daily`)
+*.db

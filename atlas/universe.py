@@ -1,134 +1,178 @@
-"""Universe resolution for the daily report.
+"""Named symbol universes — notably the NASDAQ top 10 by market capitalisation.
 
-The daily-report guardrail is explicit: *constituents are resolved, not
-recalled.* A "top 10" written from memory is exactly the kind of confident
-fabrication the whole system is built to avoid. So this module always returns a
-constituent list **with its ranking source stated** — either a dated static
-snapshot committed to this file, or a live market-cap re-ranking pulled through a
-fundamentals feed. The caller reports whichever was actually used.
+The daily report (Section 20) runs over a *universe*. A universe is never
+invented at request time: it is either a **static, dated constituent list**
+shipped here (honest about being a snapshot) or a **live re-ranking** computed
+from a fundamentals feed's market-cap field. Both carry provenance so a report
+can always say where its ten names came from.
 
-The static snapshots are dated. They are a starting point that a live refresh
-improves on, not a claim about today's market.
+Design note, in keeping with the no-fabrication guardrail: the static list is
+stamped with the date it was last verified and is always reported as
+``ranking_source: "static-snapshot"``. If the caller wants a genuinely current
+ranking, :func:`resolve_universe` with ``refresh=True`` pulls market caps from
+the provider and re-ranks a candidate pool — and if that feed is unavailable it
+falls back to the snapshot **and says so** rather than pretending.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
-# Dated static snapshots. Update the date when the membership is refreshed.
-# NASDAQ-100 top 10 by market cap as of the snapshot date (approximate ordering);
-# the live refresh reorders and is preferred when a fundamentals feed is present.
-_SNAPSHOTS: Dict[str, Dict[str, object]] = {
-    "nasdaq10": {
-        "as_of": "2026-08-01",
-        "description": "Ten largest NASDAQ listings by market capitalisation",
-        "constituents": [
-            "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL",
-            "META", "AVGO", "TSLA", "COST", "NFLX",
-        ],
-    },
-    "nasdaq5": {
-        "as_of": "2026-08-01",
-        "description": "Five largest NASDAQ listings by market capitalisation",
-        "constituents": ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL"],
-    },
+#: Date the static constituent lists below were last verified by a human.
+SNAPSHOT_ASOF = "2026-05-01"
+
+#: NASDAQ's largest listings by market capitalisation, most-recent verified order.
+#: A snapshot — re-rank with a live fundamentals feed for anything decision-grade.
+NASDAQ_TOP10: List[str] = [
+    "NVDA", "MSFT", "AAPL", "GOOGL", "AMZN",
+    "META", "AVGO", "TSLA", "NFLX", "COST",
+]
+
+#: The pool searched when re-ranking by live market cap. Wider than ten so a
+#: name that has climbed into the top ten since the snapshot can be found.
+NASDAQ_MEGACAP_POOL: List[str] = NASDAQ_TOP10 + [
+    "AMD", "PLTR", "CSCO", "ADBE", "PEP", "LIN", "TMUS", "INTU", "QCOM", "AMAT",
+    "TXN", "ISRG", "BKNG", "AMGN", "HON", "MU", "ADP", "GILD", "VRTX", "LRCX",
+]
+
+#: Common index proxies for relative-strength benchmarking.
+BENCHMARKS: Dict[str, str] = {
+    "nasdaq100": "QQQ",
+    "nasdaq_composite": "ONEQ",
+    "sp500": "SPY",
+}
+
+UNIVERSES: Dict[str, List[str]] = {
+    "nasdaq10": NASDAQ_TOP10,
+    "nasdaq_megacap": NASDAQ_MEGACAP_POOL,
 }
 
 
-def _parse_market_cap(raw) -> Optional[float]:
-    """Coerce a fundamentals ``MarketCapitalization`` field to a float."""
-    if raw is None:
-        return None
+class UnknownUniverse(KeyError):
+    """Raised when a caller names a universe that does not exist."""
+
+
+def list_universes() -> Dict[str, int]:
+    """Names of the built-in universes and how many symbols each holds."""
+    return {name: len(syms) for name, syms in UNIVERSES.items()}
+
+
+def static_universe(name: str = "nasdaq10", limit: Optional[int] = None) -> List[str]:
+    """The shipped constituent list for ``name`` (a dated snapshot, not live)."""
     try:
-        val = float(str(raw).replace(",", "").strip())
-    except (ValueError, TypeError):
-        return None
-    return val if val > 0 else None
+        syms = UNIVERSES[name]
+    except KeyError:  # pragma: no cover - defensive
+        raise UnknownUniverse(
+            f"unknown universe '{name}'; known: {', '.join(sorted(UNIVERSES))}"
+        ) from None
+    return list(syms[:limit] if limit else syms)
 
 
-def get_universe(name: str = "nasdaq10", refresh: bool = False,
-                 provider=None) -> Dict[str, object]:
-    """Resolve a named universe to its constituents plus the ranking source.
+def _market_cap(overview: dict) -> Optional[float]:
+    """Pull a numeric market cap out of a provider's company-overview dict."""
+    for key in ("MarketCapitalization", "market_cap", "marketCap", "MarketCap"):
+        raw = overview.get(key)
+        if raw in (None, "", "None", "-"):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
 
-    Parameters
-    ----------
-    name:
-        Universe key (``"nasdaq10"`` by default).
-    refresh:
-        If True and ``provider`` exposes ``get_fundamentals``, re-rank the
-        snapshot's candidate names by live market capitalisation. If the refresh
-        cannot cover every candidate, it falls back to the static snapshot and
-        records the fallback in ``notes`` — never a partial, silently narrowed
-        universe.
-    provider:
-        A data provider (only used when ``refresh`` is True).
 
-    Returns a dict with ``name``, ``constituents``, ``ranking_source``
-    (``"static_snapshot"`` or ``"live_market_cap"``), ``as_of``, ``notes``.
+def rank_by_market_cap(symbols: Sequence[str], registry, top: int = 10) -> dict:
+    """Re-rank ``symbols`` by live market cap from the registry's fundamentals feed.
+
+    Returns a dict with the ranked ``symbols``, the per-symbol ``market_caps``
+    actually retrieved, and any ``errors``. Symbols whose cap could not be
+    fetched are **excluded from the ranking** rather than assigned a guess; the
+    caller decides whether the coverage is good enough.
     """
-    key = name.lower().strip()
-    snap = _SNAPSHOTS.get(key)
-    if snap is None:
-        return {
-            "name": name,
-            "error": f"unknown universe '{name}'. Known: {sorted(_SNAPSHOTS)}",
-            "constituents": [],
-            "ranking_source": None,
-            "notes": [],
-        }
-
-    candidates: List[str] = list(snap["constituents"])
-    result: Dict[str, object] = {
-        "name": key,
-        "constituents": list(candidates),
-        "ranking_source": "static_snapshot",
-        "as_of": snap["as_of"],
-        "description": snap["description"],
-        "notes": [],
+    caps: Dict[str, float] = {}
+    errors: List[str] = []
+    for sym in symbols:
+        res = registry.get_fundamentals(sym)
+        if "error" in res:
+            errors.append(f"{sym}: {res['error']}")
+            continue
+        cap = _market_cap(res.get("overview") or {})
+        if cap is None:
+            errors.append(f"{sym}: overview had no usable MarketCapitalization field")
+            continue
+        caps[sym] = cap
+    ranked = sorted(caps, key=lambda s: caps[s], reverse=True)[:top]
+    return {
+        "symbols": ranked,
+        "market_caps": {s: caps[s] for s in ranked},
+        "covered": len(caps),
+        "requested": len(symbols),
+        "errors": errors,
     }
 
-    if not refresh:
-        return result
 
-    if provider is None or not hasattr(provider, "get_fundamentals"):
-        result["notes"].append(
-            "live refresh requested but no fundamentals feed available; "
-            "using dated static snapshot."
-        )
-        return result
+def resolve_universe(
+    name: str = "nasdaq10",
+    registry=None,
+    refresh: bool = False,
+    limit: int = 10,
+    pool: Optional[Sequence[str]] = None,
+) -> dict:
+    """Resolve a universe to a concrete, provenance-carrying symbol list.
 
-    # Live re-rank by market cap over the snapshot's candidate names.
-    caps: Dict[str, float] = {}
-    failed: List[str] = []
-    for sym in candidates:
-        try:
-            overview = provider.get_fundamentals(sym)
-        except Exception as e:  # noqa: BLE001 - a failed name is reported, not fatal
-            failed.append(f"{sym}: {e}")
-            continue
-        cap = _parse_market_cap((overview or {}).get("MarketCapitalization"))
-        if cap is None:
-            failed.append(f"{sym}: no MarketCapitalization")
+    With ``refresh=False`` (the default) this returns the dated static snapshot.
+    With ``refresh=True`` and a registry whose provider serves fundamentals, it
+    re-ranks ``pool`` (default: the NASDAQ mega-cap pool) by market cap.
+
+    A refresh that cannot cover at least ``limit`` symbols falls back to the
+    snapshot and records the reason in ``notes`` — it never returns a partial
+    ranking dressed up as a complete one.
+    """
+    notes: List[str] = []
+    symbols = static_universe(name, limit=limit)
+    ranking_source = "static-snapshot"
+    market_caps: Optional[Dict[str, float]] = None
+    asof = SNAPSHOT_ASOF
+
+    if refresh:
+        if registry is None:
+            notes.append("refresh requested but no registry supplied; using the static snapshot.")
         else:
-            caps[sym] = cap
+            candidates = list(pool) if pool else static_universe("nasdaq_megacap")
+            ranked = rank_by_market_cap(candidates, registry, top=limit)
+            if len(ranked["symbols"]) >= limit:
+                symbols = ranked["symbols"]
+                market_caps = ranked["market_caps"]
+                ranking_source = "live-market-cap"
+                asof = None  # stamped by the caller from the data's own asof
+                if ranked["errors"]:
+                    notes.append(
+                        f"{len(ranked['errors'])} of {ranked['requested']} candidates had no "
+                        f"market-cap data and were excluded from the ranking."
+                    )
+            else:
+                notes.append(
+                    f"live market-cap refresh covered only {ranked['covered']} of "
+                    f"{ranked['requested']} candidates (needed {limit}); fell back to the "
+                    f"{SNAPSHOT_ASOF} static snapshot."
+                )
+                if ranked["errors"]:
+                    notes.append("refresh errors: " + "; ".join(ranked["errors"][:3]))
 
-    if len(caps) < len(candidates):
-        result["notes"].append(
-            "live market-cap refresh could not cover all candidates "
-            f"({len(caps)}/{len(candidates)}); falling back to dated static "
-            "snapshot ordering. Missing: " + "; ".join(failed)
+    if ranking_source == "static-snapshot":
+        notes.append(
+            f"Constituents are a static snapshot verified {SNAPSHOT_ASOF}, not a live "
+            f"index feed. Index membership and market-cap order change; re-rank with "
+            f"refresh=True against a fundamentals feed before treating the list as current."
         )
-        return result
 
-    ranked = sorted(caps, key=lambda s: caps[s], reverse=True)
-    result["constituents"] = ranked
-    result["ranking_source"] = "live_market_cap"
-    result["market_caps"] = {s: caps[s] for s in ranked}
-    result["notes"].append(
-        f"ranked by live market capitalisation via provider "
-        f"'{getattr(provider, 'source', '?')}'."
-    )
-    return result
-
-
-def list_universes() -> List[str]:
-    return sorted(_SNAPSHOTS)
+    return {
+        "universe": name,
+        "symbols": symbols,
+        "count": len(symbols),
+        "ranking_source": ranking_source,
+        "ranking_asof": asof,
+        "market_caps": market_caps,
+        "notes": notes,
+    }

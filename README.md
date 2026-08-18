@@ -18,7 +18,8 @@ and audit.
 
 | Path | Purpose |
 |---|---|
-| [`prompts/atlas-system-prompt.md`](prompts/atlas-system-prompt.md) | The **deployable** system prompt — Sections 1–19 only. Paste into the system/developer role of a function-calling LLM. |
+| [`prompts/atlas-system-prompt.md`](prompts/atlas-system-prompt.md) | The **deployable** system prompt — Sections 1–22 only. Paste into the system/developer role of a function-calling LLM. |
+| [`prompts/atlas-daily-report-prompt.md`](prompts/atlas-daily-report-prompt.md) | A **narrow, single-purpose** prompt for the scheduled daily NASDAQ-top-10 forecast job — written for unattended runs with no human to ask. |
 | [`docs/atlas-spec.md`](docs/atlas-spec.md) | The **full specification** — operator notes, the system prompt, and Appendices A (competitive coverage) & B (candor on edge). The canonical reference. |
 | [`atlas/`](atlas/) | The **reference compute layer** — a pure-Python implementation of the Section 3 tools (indicators, levels, patterns, backtesting, seasonality, risk sizing, ATLAS Score). See [The reference implementation](#the-reference-implementation). |
 | [`tests/`](tests/) | pytest suite covering the compute layer against hand-computed values. |
@@ -65,6 +66,16 @@ the agent degrades gracefully and states what it cannot do.
 - `optimize_portfolio(holdings, constraints, objective)`
 - `compute_seasonality(symbol, granularity)`
 
+**Universes, forecasting & the prediction store**
+- `get_universe(name, refresh?)` — constituents with their ranking source (dated snapshot vs. live market cap).
+- `forecast_price(symbol, horizon_days, method, with_skill?)` — horizon distribution + walk-forward skill.
+- `compare_forecast_methods(symbol, horizon_days)` — every method scored over identical origins.
+- `run_daily_report(universe, horizon_days, method, ...)` — the full daily run, persisted.
+- `query_predictions(...)` / `report_from_store(...)` — read and regenerate from the table.
+- `resolve_predictions(asof?)` — score every forecast whose horizon has elapsed.
+- `forecast_accuracy(symbol?)` — realised accuracy over resolved predictions only.
+- `render_report(report, fmt)` — text / Markdown / self-contained HTML.
+
 **Action (guarded)**
 - `create_alert(symbol, condition, channel)` — persists a monitoring rule; never auto-executes.
 - `paper_trade(order)` — simulated fill only. **ATLAS never places real orders.**
@@ -83,6 +94,9 @@ the agent degrades gracefully and states what it cannot do.
 | Portfolio construction, optimization, rebalancing, benchmark comparison | 11 |
 | Sentiment/news/event fusion as context and risk | 12 |
 | Dynamic alerts & monitoring (notifications, never auto-trades) | 13 |
+| Daily universe report over the NASDAQ top 10, with constituent provenance | 20 |
+| 30-day price forecasting as a distribution, with walk-forward skill measurement | 21 |
+| Persistent prediction store, outcome resolution, and reports generated from the table | 22 |
 
 See [Appendix A](docs/atlas-spec.md#appendix-a--competitive-coverage-matrix-operator-reference)
 for how each area maps against TrendSpider, Trade Ideas, Tickeron, Autochartist,
@@ -119,7 +133,11 @@ discipline: it computes only from the data it is given and never fabricates.
 | `atlas/alerts.py` | Persistent alert store with static & dynamic (ATR/indicator) conditions — **never auto-trades** | 13 |
 | `atlas/calibration.py` | Signal-confidence vs. realized-outcome tracker: reliability buckets, Brier score, ECE | Appendix B |
 | `atlas/analysis.py` | Regime classification, confluence score, the Section 15 output envelope | 4, 6, 14, 15 |
-| `atlas/data/` | `DataProvider` seam: `AlphaVantageProvider` (real, free key), `StooqProvider`, `CSVProvider` (your files), and a seeded `SyntheticProvider` flagged `simulated=True` | 3 |
+| `atlas/universe.py` | Named universes (NASDAQ top 10) with a dated snapshot **and** live market-cap re-ranking, both carrying provenance | 20 |
+| `atlas/forecast.py` | Horizon price distribution (shrunk drift + EWMA volatility, lognormal bands) and the walk-forward skill check that scores it against a random walk | 21 |
+| `atlas/store.py` | SQLite prediction store: runs / predictions / outcomes / reports, outcome resolution, accuracy and the per-symbol leaderboard | 22 |
+| `atlas/daily.py` | The daily report: run a universe, persist it, render it as text / Markdown / self-contained HTML, and regenerate any past run from the table | 20, 22 |
+| `atlas/data/` | `DataProvider` seam: `YahooProvider` (free, no key, true daily history), `AlphaVantageProvider` (free key), `StooqProvider`, `CSVProvider` (your files), and a seeded `SyntheticProvider` flagged `simulated=True` | 3 |
 | `atlas/tools.py` | The Section 3 function-calling registry over the above | 3 |
 
 Design guarantees that mirror the guardrails:
@@ -132,6 +150,11 @@ Design guarantees that mirror the guardrails:
   the `verdict()` refuses to call a tiny sample an edge.
 - **Risk before reward.** `size_position` caps risk per trade and returns the
   worst-case currency loss; `build_signal` rejects setups below the R threshold.
+- **No forecast without its error bar — or its measured error.** Every forecast
+  ships an 80%/95% interval *and* a walk-forward score against a random walk. A
+  model that loses to "the price does not move" says so in its own verdict.
+- **No unearned track record.** Accuracy is computed only from predictions whose
+  horizon has elapsed and whose realised close has been fetched and stored.
 
 ### Quickstart
 
@@ -163,13 +186,100 @@ python -m atlas.cli screen AAPL,MSFT,NVDA,AMD --above-ema50 --limit 5
 
 # Optimize a portfolio (min-variance) vs a benchmark
 python -m atlas.cli portfolio AAPL,MSFT,NVDA --objective min_variance --benchmark SPY
+
+# The daily report: NASDAQ top 10, a 30-day forecast each, stored and rendered
+python -m atlas.cli daily --format text
+python -m atlas.cli daily --render html --out report.html      # shareable artefact
+
+# One symbol's 30-day distribution, with its measured skill vs a random walk
+python -m atlas.cli forecast AAPL --horizon 30 --format text
+python -m atlas.cli forecast AAPL --compare --format text      # rank the methods
+
+# Work the prediction table
+python -m atlas.cli predictions runs
+python -m atlas.cli predictions resolve         # score forecasts whose 30 days elapsed
+python -m atlas.cli predictions accuracy        # realised track record + leaderboard
+python -m atlas.cli predictions report --render markdown   # regenerate from the table
+python -m atlas.cli predictions export --out predictions.csv
 ```
+
+## The daily forecast report
+
+`atlas daily` is the scheduled job the whole store exists for. One command
+resolves the universe, forecasts every name, writes the predictions down, and
+renders the report:
+
+```bash
+python -m atlas.cli daily --alpha-vantage --events --render html --out today.html
+```
+
+What it does, in order:
+
+1. **Resolves the constituents** rather than recalling them. The NASDAQ top ten
+   ships as a *dated snapshot* (`atlas/universe.py`); `--refresh-universe`
+   re-ranks it by live market cap from the fundamentals feed. Either way the
+   report states which one it used, and a refresh that can't cover all ten falls
+   back to the snapshot and says so.
+2. **Fetches each symbol once** and reuses those bars for the analysis, the
+   forecast, and the skill check — ten data requests for ten names, which is what
+   makes the run survive a free tier's daily cap.
+3. **Forecasts 30 calendar days ahead** as a distribution: an EWMA volatility, a
+   drift shrunk toward zero against a stated prior and capped at one horizon
+   sigma, and lognormal 80%/95% bands. The headline number is the *median*; the
+   distribution's mean is reported next to it, not instead of it.
+4. **Scores its own model** by walking the same forecast forward through that
+   symbol's history — MAPE against a naive random walk, directional hit rate, and
+   how often the realised price actually landed inside the stated bands. On most
+   symbols the honest verdict is *no measurable edge*, and the report prints that
+   verdict rather than hiding it.
+5. **Persists** one `runs` row and one `predictions` row per symbol to SQLite.
+6. **Renders** text, Markdown, or a self-contained dark-themed HTML page.
+
+Later, when the horizon has elapsed:
+
+```bash
+python -m atlas.cli predictions resolve     # fetch realised closes, score every forecast
+python -m atlas.cli predictions accuracy    # MAPE, skill vs naive, coverage, leaderboard
+```
+
+Resolution uses the close of the last bar **at or before** the target date — never
+a later bar, and never today's price standing in for a target the data hasn't
+reached. Accuracy is reported only over resolved rows, always with the sample
+size, and under ~10 resolutions it is labelled a running tally rather than a hit
+rate. If the model loses to a random walk over a meaningful sample, that is what
+the report says.
+
+### The prediction table
+
+`atlas_predictions.db` (SQLite, standard library — no new dependencies):
+
+| Table | Holds |
+|---|---|
+| `runs` | one row per report run: universe, ranking source, provider, timeframe, horizon, model + version, simulated flag, notes |
+| `predictions` | one row per symbol per run: forecast, intervals, P(up), volatility and drift inputs, ATLAS Score and sub-scores, regime, signal direction, and the model's measured skill at issue time |
+| `outcomes` | one row per resolved prediction: realised price, absolute/signed error, whether the naive baseline did better, 80%/95% band containment, directional correctness |
+| `reports` | rendered artefacts kept with the run that produced them |
+
+Reports are generated **from this table**, not from a re-computation — a re-run
+would quietly produce different numbers than the ones actually issued, which is
+how track records get laundered. `atlas predictions report` reads the rows.
 
 ### Web dashboard
 
 A local, zero-dependency web dashboard runs the real engine behind a browser UI —
 enter a symbol, pick a data source, and see the full ATLAS analysis rendered as
 cards (score, sub-scores, levels, patterns, fundamentals/sentiment, events, notes).
+Six tabs: **Chart**, **Scanner**, **Backtester**, **Analysis**, **Daily Report**
+and **Predictions**.
+
+The **Daily Report** tab runs the universe from the browser and renders the
+forecast table with a distribution bar per symbol (median forecast, today's
+close, the 80% band inside the 95% range); clicking a row opens the model behind
+that forecast — volatility, drift, shrinkage, and the walk-forward skill
+statistics. The **Predictions** tab is the store: past runs, open vs. resolved
+predictions with the realised price marked on the same bar, realised accuracy,
+the per-symbol leaderboard, a **Resolve due** button, and one-click export of the
+report (HTML) or the raw table (CSV).
 
 ```bash
 python -m atlas.cli serve            # then open http://127.0.0.1:8787
@@ -180,65 +290,16 @@ Pick **Synthetic** (demo, no key), **Alpha Vantage** (enter your free key; toggl
 fundamentals/news/events), or **CSV** (reads `SYMBOL_1d.csv` from a folder). It is
 a *local* development server bound to localhost — not hardened for public exposure.
 
-### Daily forecast report (scheduled job)
-
-`atlas daily` is a self-contained, unattended job: it forecasts a fixed universe's
-30-day **price distribution** (default: the ten largest NASDAQ listings), writes
-every prediction to a store *before* the market can move, resolves predictions
-whose horizon has elapsed, and tracks realised accuracy against a random-walk
-baseline. It is built for cron — no human answers a clarifying question; it takes
-the documented default, notes the assumption, and finishes. The system prompt for
-the job lives in [`prompts/atlas-daily-report-prompt.md`](prompts/atlas-daily-report-prompt.md).
-
-```bash
-# Produce today's report (HTML artefact) and persist the predictions
-python -m atlas.cli daily run --report-format html --store ./predictions.json > report.html
-
-# Text/Markdown for a message or a document; JSON for a pipeline
-python -m atlas.cli daily run --report-format text
-python -m atlas.cli daily run --universe nasdaq5 --horizon 30 --method drift
-
-# Resolve elapsed predictions, then read the realised track record
-python -m atlas.cli daily resolve  --store ./predictions.json
-python -m atlas.cli daily accuracy --store ./predictions.json
-python -m atlas.cli daily replay   --store ./predictions.json --report-format markdown
-
-# One-symbol horizon distribution; --compare scores every method out-of-sample
-python -m atlas.cli forecast AAPL --horizon 30 --method drift
-python -m atlas.cli forecast AAPL --compare
-python -m atlas.cli predictions --store ./predictions.json --resolved false
-```
-
-The forecast model (§21) estimates **volatility by EWMA** (so it tracks the current
-regime) and **drift as the mean log return shrunk toward zero** by its own
-signal-to-noise ratio, then **hard-capped at one horizon standard deviation** — a
-sample mean of daily returns is mostly noise, and a trend is never allowed to
-dominate the projection. The distribution is lognormal: the **median** is the
-headline, the (higher) **mean** is reported separately, and P(up) is the
-calibratable prediction. Methods: `drift` (default), `naive` (random walk), `blend`
-(drift + capped momentum); `--compare` scores all three over identical
-walk-forward origins so the choice is evidence-based. Realised prices resolve as
-an **as-of join** — the last bar at or before the target date, only once the data
-has actually reached it.
-
-Every forecast is a distribution, never a target: each row carries a median, an
-80%/95% interval, P(up), and the model's **measured walk-forward skill vs. a random
-walk** on that symbol's own history — rows where the model has no edge say so.
-Accuracy is computed only from resolved predictions; under ~10 resolved it is shown
-as a running tally, not a hit rate. Simulated and stale data are banner-flagged at
-the top, and any symbol that fails to fetch is listed with its error and excluded
-from the summary — never dropped silently.
-
 ### Real market data
 
 Data sources plug into the same `DataProvider` seam:
 
 ```bash
-# 0. Yahoo Finance — free, no key, decades of daily history (best for real skill checks)
+# 0. Yahoo Finance — free, no key, decades of true daily history (best for skill checks)
+python -m atlas.cli daily --yahoo --render html --out report.html
 python -m atlas.cli forecast AAPL --compare --yahoo
-python -m atlas.cli daily run --yahoo --store ./predictions.json --report-format html > report.html
 
-# 1. Alpha Vantage — real data with a free API key (recommended for live use)
+# 1. Alpha Vantage — real data with a free API key (compact ~100 daily bars on free)
 set ALPHAVANTAGE_API_KEY=YOURKEY        # Windows (cmd);  export on macOS/Linux
 python -m atlas.cli analyze AAPL --alpha-vantage
 python -m atlas.cli analyze AAPL --alpha-vantage --api-key YOURKEY   # or pass inline
@@ -247,16 +308,19 @@ python -m atlas.cli analyze AAPL --alpha-vantage --api-key YOURKEY   # or pass i
 python -m atlas.cli analyze AAPL --csv ./mydata
 python -m atlas.cli backtest AAPL --csv ./mydata --lookback 600   # long history = real backtests
 
-# 2b. Fetch full history once into a CSV cache, then work offline against it.
-#     Yahoo Finance (free, no key, decades of daily history) is the default source.
+# 2b. Fetch full history once into a CSV cache, then work offline (Yahoo by default)
 python -m atlas.cli fetch AAPL,MSFT,NVDA --out ./mydata
-python -m atlas.cli fetch AAPL --out ./mydata --alpha-vantage --api-key YOURKEY  # or AV / --stooq
-python -m atlas.cli forecast AAPL --compare --csv ./mydata   # many-fold skill, not noise
-python -m atlas.cli daily run --csv ./mydata --store ./predictions.json --report-format html > report.html
+python -m atlas.cli daily --csv ./mydata --render html --out report.html
 
 # 3. Synthetic (default) — deterministic, seeded, always flagged simulated
 python -m atlas.cli analyze AAPL
 ```
+
+`atlas diag <symbol> --yahoo` sanity-checks any feed in one command: recent bars,
+the median gap between them (catches a feed that hands back weekly/monthly points
+labelled daily), the largest daily moves (catches split discontinuities), and the
+measured volatility. `--yahoo` uses an explicit `period1`/`period2` window so Yahoo
+serves true daily bars instead of silently downsampling `range=max` to ~200 points.
 
 ```python
 from atlas import ToolRegistry, AlphaVantageProvider
@@ -271,14 +335,10 @@ and intraday (`1m`–`1h`). Two free-tier limits to know:
 - **~25 requests/day** — suits single-symbol lookups (`analyze`, `signal`,
   `score`) more than wide screens or multi-symbol portfolios (one request per
   symbol).
-- **Daily history is ~100 bars on the free tier.** `outputsize=full` is now a
-  premium feature for `TIME_SERIES_DAILY` (a free key requesting it gets an error),
-  so free daily requests stay `compact` (~100 bars). That's ample for the
-  indicators, patterns, and regime logic. The walk-forward skill check still runs
-  on ~100 bars but with few, overlapping folds — it is reported and **flagged
-  `noise_dominated`**, not hidden. For a robust, many-fold skill measurement, feed
-  long daily history via `--csv` (a browser-downloaded file), or pass `--premium`
-  with a premium key to unlock full history.
+- **Daily history is capped at ~100 bars** on the free tier (`outputsize=full`
+  is premium-only). That's ample for the indicators, patterns, and regime logic;
+  only very long lookbacks (e.g. EMA200) are affected. Pass `--premium` (or
+  `AlphaVantageProvider(premium=True)`) with a premium key to unlock full history.
 
 Alpha Vantage returns JSON on errors/rate-limits even in CSV mode — the provider
 detects those and raises a clear message instead of mis-parsing.
@@ -362,7 +422,13 @@ Point the CLI at real data with `--csv <dir>`, using files named
 3. Interact using the command modes (Section 16): `analyze <symbol>`,
    `signal <symbol>`, `score <symbol>`, `scan <natural language>`,
    `backtest <rules>`, `portfolio <goal/constraints>`, `rebalance`,
-   `alert <condition>`, `explain <prior output>`, `watch <list>`.
+   `alert <condition>`, `explain <prior output>`, `watch <list>`,
+   `daily [universe]`, `forecast <symbol> [horizon]`, `predictions`,
+   `resolve`, `accuracy [symbol]`.
+4. For an **unattended scheduled run** of just the daily report, deploy
+   [`prompts/atlas-daily-report-prompt.md`](prompts/atlas-daily-report-prompt.md)
+   instead — same discipline, narrower surface, written for a job with no human
+   in the loop.
 
 ## Where the real edge comes from
 

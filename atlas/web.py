@@ -225,6 +225,216 @@ def build_scan_data(params: dict):
         return 500, {"error": f"{type(e).__name__}: {e}"}
 
 
+# --------------------------------------------------------------------------- #
+# Daily forecast report + prediction store (§20-22)
+# --------------------------------------------------------------------------- #
+def _db_path(params: dict) -> str:
+    """Resolve the store path from a request, refusing anything path-like.
+
+    The dashboard is a localhost dev server, but a database name arriving over
+    HTTP still has no business containing a directory component.
+    """
+    from .store import DEFAULT_DB
+
+    raw = (params.get("db") or "").strip() or DEFAULT_DB
+    if raw == ":memory:":
+        return raw
+    if "/" in raw or "\\" in raw or raw.startswith("."):
+        raise ValueError("db must be a plain file name in the working directory")
+    if not raw.endswith(".db"):
+        raw += ".db"
+    return raw
+
+
+def _open_store(params: dict):
+    from .store import PredictionStore
+
+    return PredictionStore(_db_path(params))
+
+
+def _api(fn):
+    """Wrap a handler so exceptions come back as JSON instead of a 500 page."""
+    def wrapped(params: dict):
+        try:
+            return fn(params)
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return 500, {"error": f"{type(e).__name__}: {e}"}
+    return wrapped
+
+
+@_api
+def run_daily_endpoint(params: dict):
+    """Run the daily forecast report over a universe and persist it."""
+    from .daily import run_daily
+
+    registry = build_registry(
+        (params.get("source") or "synthetic").strip(),
+        api_key=params.get("apikey", ""), csv_dir=params.get("csvdir", "./data"),
+        seed=int(params.get("seed", 42) or 42),
+    )
+    symbols = [s.strip().upper() for s in (params.get("symbols") or "").split(",") if s.strip()]
+    persist = _truthy(params.get("persist", "1"))
+    store = _open_store(params) if persist else None
+    try:
+        rep = run_daily(
+            registry=registry,
+            universe=(params.get("universe") or "nasdaq10").strip(),
+            symbols=symbols or None,
+            horizon_days=int(params.get("horizon", 30) or 30),
+            method=(params.get("method") or "drift").strip(),
+            timeframe=params.get("timeframe", "1d") or "1d",
+            lookback=int(params.get("lookback", 400) or 400),
+            benchmark=(params.get("benchmark") or "").strip() or None,
+            with_fundamentals=_truthy(params.get("fundamentals", "")),
+            with_sentiment=_truthy(params.get("sentiment", "")),
+            with_events=_truthy(params.get("events", "")),
+            refresh_universe=_truthy(params.get("refresh_universe", "")),
+            with_skill=_truthy(params.get("skill", "1")),
+            store=store, persist=persist,
+        )
+    finally:
+        if store is not None:
+            store.close()
+    return 200, rep
+
+
+@_api
+def forecast_endpoint(params: dict):
+    """Single-symbol horizon forecast with its walk-forward skill check."""
+    symbol = (params.get("symbol") or "").strip().upper()
+    if not symbol:
+        return 400, {"error": "symbol is required"}
+    registry = build_registry(
+        (params.get("source") or "synthetic").strip(),
+        api_key=params.get("apikey", ""), csv_dir=params.get("csvdir", "./data"),
+        seed=int(params.get("seed", 42) or 42),
+    )
+    out = registry.forecast_price(
+        symbol,
+        horizon_days=int(params.get("horizon", 30) or 30),
+        method=(params.get("method") or "drift").strip(),
+        timeframe=params.get("timeframe", "1d") or "1d",
+        lookback=int(params.get("lookback", 400) or 400),
+        with_skill=_truthy(params.get("skill", "1")),
+    )
+    return 200, out
+
+
+@_api
+def runs_endpoint(params: dict):
+    with _open_store(params) as store:
+        return 200, {"runs": store.runs(limit=int(params.get("limit", 50) or 50)),
+                     "stats": store.stats()}
+
+
+@_api
+def stored_report_endpoint(params: dict):
+    from .daily import report_from_store
+
+    with _open_store(params) as store:
+        run_id = params.get("run_id")
+        rep = report_from_store(store, run_id=int(run_id) if run_id else None,
+                                universe=(params.get("universe") or "").strip() or None)
+        return (200 if "error" not in rep else 404), rep
+
+
+@_api
+def predictions_endpoint(params: dict):
+    with _open_store(params) as store:
+        resolved = params.get("resolved")
+        flag = None if resolved in (None, "", "any") else _truthy(resolved)
+        rows = store.predictions(
+            run_id=int(params["run_id"]) if params.get("run_id") else None,
+            symbol=(params.get("symbol") or "").strip().upper() or None,
+            resolved=flag, limit=int(params.get("limit", 300) or 300),
+        )
+        return 200, {"count": len(rows), "rows": rows}
+
+
+@_api
+def accuracy_endpoint(params: dict):
+    with _open_store(params) as store:
+        return 200, {
+            "overall": store.accuracy(
+                symbol=(params.get("symbol") or "").strip().upper() or None,
+                horizon_days=int(params["horizon"]) if params.get("horizon") else None),
+            "by_symbol": store.leaderboard(),
+            "stats": store.stats(),
+        }
+
+
+@_api
+def resolve_endpoint(params: dict):
+    registry = build_registry(
+        (params.get("source") or "synthetic").strip(),
+        api_key=params.get("apikey", ""), csv_dir=params.get("csvdir", "./data"),
+        seed=int(params.get("seed", 42) or 42),
+    )
+    with _open_store(params) as store:
+        out = store.resolve_due(registry, asof=(params.get("asof") or None),
+                                lookback=int(params.get("lookback", 400) or 400))
+        out["accuracy"] = store.accuracy()
+        return 200, out
+
+
+def render_report_endpoint(params: dict):
+    """Render a stored run as a downloadable document. Returns (status, body, mime)."""
+    from .daily import render_daily, report_from_store
+
+    fmt = (params.get("fmt") or "html").strip()
+    mime = {"html": "text/html; charset=utf-8",
+            "markdown": "text/markdown; charset=utf-8",
+            "text": "text/plain; charset=utf-8"}.get(fmt, "text/plain; charset=utf-8")
+    try:
+        with _open_store(params) as store:
+            run_id = params.get("run_id")
+            rep = report_from_store(store, run_id=int(run_id) if run_id else None)
+            if "error" in rep:
+                return 404, rep["error"].encode("utf-8"), "text/plain; charset=utf-8"
+            body = render_daily(rep, fmt)
+            store.record_report(rep.get("run_id"), fmt, body,
+                                title=f"ATLAS Daily {rep.get('run_date')}")
+            return 200, body.encode("utf-8"), mime
+    except Exception as e:  # noqa: BLE001
+        return 500, f"{type(e).__name__}: {e}".encode("utf-8"), "text/plain; charset=utf-8"
+
+
+def export_csv_endpoint(params: dict):
+    """Predictions (+ outcomes) as CSV. Returns (status, body, mime)."""
+    try:
+        with _open_store(params) as store:
+            csv_text = store.export_csv(
+                run_id=int(params["run_id"]) if params.get("run_id") else None,
+                symbol=(params.get("symbol") or "").strip().upper() or None)
+            return 200, csv_text.encode("utf-8"), "text/csv; charset=utf-8"
+    except Exception as e:  # noqa: BLE001
+        return 500, f"{type(e).__name__}: {e}".encode("utf-8"), "text/plain; charset=utf-8"
+
+
+#: JSON API routes -> handler returning ``(status, payload_dict)``.
+JSON_ROUTES = {
+    "/api/analyze": run_analysis,
+    "/api/chart": build_chart_data,
+    "/api/scan": build_scan_data,
+    "/api/backtest": build_backtest_data,
+    "/api/daily/run": run_daily_endpoint,
+    "/api/daily/runs": runs_endpoint,
+    "/api/daily/report": stored_report_endpoint,
+    "/api/daily/predictions": predictions_endpoint,
+    "/api/daily/accuracy": accuracy_endpoint,
+    "/api/daily/resolve": resolve_endpoint,
+    "/api/forecast": forecast_endpoint,
+}
+
+#: Routes that return a rendered document rather than JSON.
+DOC_ROUTES = {
+    "/api/daily/render": render_report_endpoint,
+    "/api/daily/export": export_csv_endpoint,
+}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # quieter console
         pass
@@ -241,29 +451,17 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/", "/index.html"):
             self._send(200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
             return
-        if parsed.path == "/api/analyze":
-            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-            status, payload = run_analysis(params)
+        params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        handler = JSON_ROUTES.get(parsed.path)
+        if handler is not None:
+            status, payload = handler(params)
             self._send(status, json.dumps(payload, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
             return
-        if parsed.path == "/api/chart":
-            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-            status, payload = build_chart_data(params)
-            self._send(status, json.dumps(payload, default=str).encode("utf-8"),
-                       "application/json; charset=utf-8")
-            return
-        if parsed.path == "/api/scan":
-            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-            status, payload = build_scan_data(params)
-            self._send(status, json.dumps(payload, default=str).encode("utf-8"),
-                       "application/json; charset=utf-8")
-            return
-        if parsed.path == "/api/backtest":
-            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-            status, payload = build_backtest_data(params)
-            self._send(status, json.dumps(payload, default=str).encode("utf-8"),
-                       "application/json; charset=utf-8")
+        doc = DOC_ROUTES.get(parsed.path)
+        if doc is not None:
+            status, body, mime = doc(params)
+            self._send(status, body, mime)
             return
         if parsed.path == "/favicon.ico":
             self._send(204, b"", "image/x-icon")
@@ -362,6 +560,26 @@ DASHBOARD_HTML = r"""<!doctype html>
   .btcanvas{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-top:10px}
   #btPrice{width:100%;height:340px;display:block}
   #btEquity{width:100%;height:170px;display:block}
+  /* daily report + prediction store */
+  .band{position:relative;height:18px;min-width:140px;background:var(--bg);
+        border:1px solid var(--line);border-radius:4px}
+  .band .rng{position:absolute;top:4px;height:9px;background:rgba(78,161,255,.30);border-radius:3px}
+  .band .now{position:absolute;top:1px;width:2px;height:15px;background:var(--muted)}
+  .band .fc{position:absolute;top:0;width:2px;height:17px;background:var(--accent)}
+  .band .act{position:absolute;top:0;width:2px;height:17px;background:var(--amber)}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .ok{color:var(--green)} .bad{color:var(--red)}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);
+        border-radius:8px;padding:10px 14px;margin:10px 0;color:var(--muted);font-size:13px}
+  .detail{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+          padding:14px 16px;margin-top:12px}
+  .detail h4{margin:0 0 8px;font-size:14px}
+  .kvgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px 18px;
+          font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .kvgrid b{color:var(--text);font-weight:600}
+  .subtabs{display:flex;gap:6px;margin:2px 0 12px}
+  .subtabs button{font-size:12px;padding:5px 10px}
+  th.lft,td.lft{text-align:left}
 </style>
 </head>
 <body>
@@ -389,6 +607,8 @@ DASHBOARD_HTML = r"""<!doctype html>
   <button id="tabScan">Scanner</button>
   <button id="tabBt">Backtester</button>
   <button id="tabAnalysis">Analysis</button>
+  <button id="tabDaily">Daily Report</button>
+  <button id="tabStore">Predictions</button>
 </div>
 <div class="wrap">
   <div id="status"></div>
@@ -433,6 +653,52 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 
   <div id="analysisView" style="display:none"></div>
+
+  <div id="dailyView" style="display:none">
+    <div class="scanctl">
+      <div class="fld"><label>Universe</label>
+        <select id="dUniverse">
+          <option value="nasdaq10">NASDAQ top 10</option>
+          <option value="nasdaq_megacap">NASDAQ mega-cap pool</option>
+          <option value="custom">custom symbols…</option>
+        </select></div>
+      <div class="fld" id="dSymWrap" style="display:none"><label>Symbols</label>
+        <input id="dSymbols" value="AAPL,MSFT,NVDA" style="width:240px"></div>
+      <div class="fld"><label>Horizon (days)</label><input id="dHorizon" value="30"></div>
+      <div class="fld"><label>Method</label>
+        <select id="dMethod">
+          <option value="drift">drift (shrunk)</option>
+          <option value="blend">blend (+ momentum)</option>
+          <option value="naive">naive (random walk)</option>
+        </select></div>
+      <div class="fld"><label>Lookback bars</label><input id="dLookback" value="400"></div>
+      <div class="fld"><label>Benchmark</label><input id="dBenchmark" value="QQQ"></div>
+      <div class="fld"><label>Skill check</label>
+        <select id="dSkill"><option value="1">on</option><option value="0">off (faster)</option></select></div>
+      <div class="fld"><label>Store to</label><input id="dDb" value="atlas_predictions.db" style="width:170px"></div>
+      <div class="fld"><label>Persist</label>
+        <select id="dPersist"><option value="1">yes</option><option value="0">no</option></select></div>
+      <button class="primary" id="dGo">Run daily report</button>
+    </div>
+    <div id="dailyResults"><div class="kv">Run the report to forecast every name in the universe
+      and write the predictions to the store.</div></div>
+  </div>
+
+  <div id="storeView" style="display:none">
+    <div class="scanctl">
+      <div class="fld"><label>Store (db)</label><input id="sDb" value="atlas_predictions.db" style="width:170px"></div>
+      <div class="fld"><label>Run</label><select id="sRun" style="min-width:230px"></select></div>
+      <div class="fld"><label>Show</label>
+        <select id="sFilter"><option value="any">all predictions</option>
+          <option value="0">open only</option><option value="1">resolved only</option></select></div>
+      <div class="fld"><label>Symbol</label><input id="sSymbol" placeholder="all" style="width:90px"></div>
+      <button id="sReload">Reload</button>
+      <button id="sResolve">Resolve due</button>
+      <button id="sReport">Open report ↗</button>
+      <button id="sExport">Export CSV ↗</button>
+    </div>
+    <div id="storeResults"></div>
+  </div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -460,6 +726,8 @@ $('tabChart').addEventListener('click',()=>showTab('chart'));
 $('tabScan').addEventListener('click',()=>showTab('scan'));
 $('tabBt').addEventListener('click',()=>showTab('bt'));
 $('tabAnalysis').addEventListener('click',()=>showTab('analysis'));
+$('tabDaily').addEventListener('click',()=>showTab('daily'));
+$('tabStore').addEventListener('click',()=>showTab('store'));
 $('scanGo').addEventListener('click',loadScan);
 $('btGo').addEventListener('click',loadBacktest);
 $('tfbar').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
@@ -467,15 +735,14 @@ $('tfbar').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>
   b.classList.add('active'); if(tab==='chart') loadChart(); }));
 
 let tab='chart';
+const TABS=['chart','scan','bt','analysis','daily','store'];
 function showTab(t){tab=t;
-  ['chart','scan','bt','analysis'].forEach(x=>$('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active',t===x));
-  $('chartView').style.display=t==='chart'?'':'none';
-  $('scanView').style.display=t==='scan'?'':'none';
-  $('btView').style.display=t==='bt'?'':'none';
-  $('analysisView').style.display=t==='analysis'?'':'none';
+  TABS.forEach(x=>$('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active',t===x));
+  TABS.forEach(x=>$(x+'View').style.display=(t===x?'':'none'));
   if(t==='chart' && !data) loadChart();
   if(t==='chart' && data) resize();
   if(t==='analysis') loadAnalysis();
+  if(t==='store' && !storeLoaded){storeLoaded=true; loadRuns().then(loadStore);}
 }
 function setStatus(t,err){const s=$('status');s.textContent=t||'';s.className=err?'err':'';}
 
@@ -753,6 +1020,227 @@ function drawEquity(cv,eq){const {x,W,H}=sizeCanvas(cv);x.clearRect(0,0,W,H);
   x.strokeStyle=C.accent;x.lineWidth=1.6;x.beginPath();
   eq.forEach((v,i)=>{const xx=xi(i),yy=y(v);if(i===0)x.moveTo(xx,yy);else x.lineTo(xx,yy);});x.stroke();
   x.fillStyle=C.muted;x.fillText('equity',PADL+2,PADT+2);
+}
+
+// ---- daily forecast report ----
+let storeLoaded=false, lastDaily=null;
+$('dUniverse').addEventListener('change',()=>{
+  $('dSymWrap').style.display=$('dUniverse').value==='custom'?'':'none';});
+$('dGo').addEventListener('click',runDaily);
+$('sReload').addEventListener('click',()=>loadRuns().then(loadStore));
+$('sResolve').addEventListener('click',resolveDue);
+$('sRun').addEventListener('change',loadStore);
+$('sFilter').addEventListener('change',loadStore);
+$('sReport').addEventListener('click',()=>{
+  const p=new URLSearchParams({db:$('sDb').value,fmt:'html'});
+  if($('sRun').value)p.set('run_id',$('sRun').value);
+  window.open('/api/daily/render?'+p,'_blank');});
+$('sExport').addEventListener('click',()=>{
+  const p=new URLSearchParams({db:$('sDb').value});
+  if($('sRun').value)p.set('run_id',$('sRun').value);
+  if($('sSymbol').value.trim())p.set('symbol',$('sSymbol').value.trim());
+  window.open('/api/daily/export?'+p,'_blank');});
+
+function dailyParams(){
+  const c=controls(), uni=$('dUniverse').value;
+  const p={source:c.source,apikey:c.apikey,csvdir:c.csvdir,
+    universe:uni==='custom'?'nasdaq10':uni,
+    horizon:$('dHorizon').value,method:$('dMethod').value,
+    lookback:$('dLookback').value,benchmark:$('dBenchmark').value,
+    skill:$('dSkill').value,persist:$('dPersist').value,db:$('dDb').value};
+  if(uni==='custom')p.symbols=$('dSymbols').value;
+  return p;
+}
+async function runDaily(){
+  setStatus('Running the daily report — forecasting every name and scoring the model …');
+  $('dailyResults').innerHTML='<div class="kv">Working… the walk-forward skill check runs a '+
+    'forecast at every historical origin, so this takes a few seconds per symbol.</div>';
+  try{
+    const r=await fetch('/api/daily/run?'+new URLSearchParams(dailyParams()));
+    const d=await r.json();
+    if(d.error){setStatus('Error: '+d.error,true);$('dailyResults').innerHTML='';return;}
+    setStatus(''); lastDaily=d; renderDaily(d); storeLoaded=false;
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+function pctCls(v){return v==null?'muted':(v>0?'up':(v<0?'down':'muted'));}
+function fmtPct(v,d){return v==null?'–':(v>=0?'+':'')+Number(v).toFixed(d==null?2:d)+'%';}
+function bandCell(r){
+  const lo=r.lo95,hi=r.hi95,last=r.last_close,fc=r.forecast_price;
+  if(lo==null||hi==null||last==null||fc==null||hi<=lo)return '';
+  const span=hi-lo, pos=v=>Math.max(0,Math.min(100,(v-lo)/span*100));
+  const act=r.actual_price!=null?`<div class="act" style="left:${pos(r.actual_price)}%"></div>`:'';
+  return `<div class="band" title="95% ${num(lo)} – ${num(hi)}">
+    <div class="rng" style="left:${pos(r.lo80)}%;width:${pos(r.hi80)-pos(r.lo80)}%"></div>
+    <div class="now" style="left:${pos(last)}%"></div>
+    <div class="fc" style="left:${pos(fc)}%"></div>${act}</div>`;
+}
+function card(l,v){return `<div class="met"><div class="l">${esc(l)}</div><div class="v">${v}</div></div>`;}
+function renderDaily(d){
+  const s=d.summary||{}, acc=d.accuracy_to_date||{};
+  let h='';
+  if(d.data_is_simulated)h+=`<div class="note"><b class="sim">SIMULATED DATA</b> — this run used the
+    synthetic provider. Nothing below describes a real market.</div>`;
+  h+=`<div class="hint">${esc(d.universe)} · ${esc(d.run_date)} · horizon ${d.horizon_days}d
+     (target ${esc(String(d.target_date||'?'))}) · model ${esc(d.method)}/${esc(d.model_version)}
+     · provider ${esc(String(d.provider))} · constituents ${esc(String(d.ranking_source))}
+     ${d.run_id?'· stored as run #'+d.run_id:'· not stored'}</div>`;
+  h+='<div class="metgrid">'+
+    card('Symbols',s.count||0)+
+    card(`Median ${d.horizon_days}d return`,fmtPct(s.median_forecast_return_pct))+
+    card('Up / down by P(up)',`${s.forecast_up||0} / ${s.forecast_down||0}`)+
+    card('Beat random walk',`${(s.symbols_with_positive_skill||[]).length} / ${s.skill_measured||0}`)+
+    (acc.resolved?card('Resolved to date',acc.resolved):'')+
+    (acc.resolved?card('Realised MAPE',num(acc.mape_pct)+'%'):'')+'</div>';
+  h+=`<table><thead><tr><th>#</th><th class="lft">Symbol</th><th>Last</th><th>Forecast</th><th>Return</th>
+    <th class="lft">80% band</th><th class="lft">Distribution</th><th>P(up)</th><th>ATLAS</th>
+    <th class="lft">Regime</th><th>Skill</th><th class="lft">Events</th></tr></thead><tbody>`;
+  (d.rows||[]).forEach(r=>{
+    if(r.error){h+=`<tr><td>${r.rank||''}</td><td><b>${esc(r.symbol)}</b></td>
+      <td colspan="10" class="flag">error: ${esc(r.error)}</td></tr>`;return;}
+    const sk=r.skill_vs_naive;
+    h+=`<tr data-sym="${esc(r.symbol)}"><td>${r.rank||''}</td><td class="lft"><b>${esc(r.symbol)}</b></td>
+      <td>${num(r.last_close)}</td><td>${num(r.forecast_price)}</td>
+      <td class="${pctCls(r.forecast_return_pct)}">${fmtPct(r.forecast_return_pct,1)}</td>
+      <td class="muted lft">${num(r.lo80)} – ${num(r.hi80)}</td>
+      <td class="lft">${bandCell(r)}</td>
+      <td>${r.prob_up==null?'–':Math.round(r.prob_up*100)+'%'}</td>
+      <td>${r.atlas_score==null?'–':Math.round(r.atlas_score)}</td>
+      <td class="muted lft">${esc(String(r.regime||'–'))}</td>
+      <td class="${sk==null?'muted':(sk>0?'ok':'bad')}">${sk==null?'–':fmtPct(sk*100,1)}</td>
+      <td class="flag lft">${esc(String(r.event_risk||''))}</td></tr>`;});
+  h+='</tbody></table>';
+  h+=`<div class="hint" style="margin-top:8px">Blue = median forecast · grey = today's close ·
+      shaded = 80% interval inside the 95% range. Click a row for the model behind it.</div>`;
+  if(s.skill_note)h+=`<div class="note">${esc(s.skill_note)}</div>`;
+  (d.notes||[]).forEach(n=>{h+=`<div class="note">${esc(n)}</div>`;});
+  h+=`<div id="dailyDetail"></div><div class="hint" style="margin-top:12px">${esc(d.disclaimer||'')}</div>`;
+  $('dailyResults').innerHTML=h;
+  $('dailyResults').querySelectorAll('tr[data-sym]').forEach(tr=>
+    tr.addEventListener('click',()=>showForecastDetail(tr.dataset.sym)));
+}
+async function showForecastDetail(sym){
+  const c=controls();
+  const p=new URLSearchParams({symbol:sym,source:c.source,apikey:c.apikey,csvdir:c.csvdir,
+    horizon:$('dHorizon').value,method:$('dMethod').value,lookback:$('dLookback').value,skill:'1'});
+  $('dailyDetail').innerHTML=`<div class="detail"><h4>${esc(sym)}</h4>
+    <div class="kv">loading the model behind this forecast…</div></div>`;
+  try{
+    const r=await fetch('/api/forecast?'+p); const f=await r.json();
+    if(f.error){$('dailyDetail').innerHTML=`<div class="detail"><h4>${esc(sym)}</h4>
+      <div class="kv">${esc(f.error)}</div></div>`;return;}
+    const cm=f.components||{}, sk=f.skill||{};
+    let h=`<div class="detail"><h4>${esc(f.symbol)} — ${f.horizon_days}d forecast
+      (${esc(f.method)}/${esc(f.model_version)})</h4>
+      <div class="kvgrid">
+        <div>last close <b>${num(f.last_close)}</b></div>
+        <div>median forecast <b>${num(f.forecast_price)}</b> (${fmtPct(f.forecast_return_pct,2)})</div>
+        <div>distribution mean <b>${num(f.expected_price)}</b></div>
+        <div>80% interval <b>${num(f.interval_80.low)} – ${num(f.interval_80.high)}</b></div>
+        <div>95% interval <b>${num(f.interval_95.low)} – ${num(f.interval_95.high)}</b></div>
+        <div>P(up) <b>${f.prob_up==null?'–':Math.round(f.prob_up*100)+'%'}</b></div>
+        <div>annualised vol <b>${num(cm.sigma_annual_pct)}%</b></div>
+        <div>raw drift <b>${num(cm.mu_raw_annual_pct)}%/yr</b> shrunk ×<b>${num(cm.shrinkage_applied)}</b></div>
+        <div>horizon drift <b>${num(cm.mu_horizon)}</b> over <b>${cm.bars_in_horizon}</b> bars</div>
+        <div>sample <b>${cm.sample_bars}</b> bars · ${esc(String(cm.drift_source||''))}</div>
+      </div>`;
+    if(sk.samples){
+      h+=`<h4 style="margin-top:14px">Measured skill (walk-forward, ${sk.samples} origins)</h4>
+        <div class="kvgrid">
+          <div>MAPE <b>${num(sk.mape_pct)}%</b> vs naive <b>${num(sk.naive_mape_pct)}%</b></div>
+          <div>skill vs naive <b class="${sk.skill_vs_naive>0?'ok':'bad'}">${fmtPct(sk.skill_vs_naive*100,1)}</b></div>
+          <div>direction right <b>${num(sk.directional_accuracy_pct)}%</b></div>
+          <div>80% coverage <b>${num(sk.coverage_80_pct)}%</b> · 95% <b>${num(sk.coverage_95_pct)}%</b></div>
+        </div>`;
+    }
+    h+=`<div class="note" style="margin-top:12px">${esc(sk.verdict||sk.note||'')}</div>`;
+    (f.warnings||[]).concat(sk.warnings||[]).forEach(w=>{h+=`<div class="note">${esc(w)}</div>`;});
+    h+=`<div class="hint">${esc(f.disclaimer||'')}</div></div>`;
+    $('dailyDetail').innerHTML=h;
+    $('dailyDetail').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){$('dailyDetail').innerHTML=`<div class="detail"><div class="kv">Request failed: ${esc(e)}</div></div>`;}
+}
+
+// ---- prediction store ----
+async function loadRuns(){
+  try{
+    const r=await fetch('/api/daily/runs?'+new URLSearchParams({db:$('sDb').value}));
+    const d=await r.json();
+    if(d.error){setStatus('Error: '+d.error,true);return;}
+    const sel=$('sRun'), keep=sel.value;
+    sel.innerHTML='<option value="">all runs</option>'+(d.runs||[]).map(run=>
+      `<option value="${run.id}">#${run.id} · ${esc(run.run_date)} · ${esc(run.universe)} ·
+        ${run.horizon_days}d · ${esc(run.method)}${run.simulated?' · SIM':''}</option>`).join('');
+    if(keep)sel.value=keep;
+    window._storeStats=d.stats||{};
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+async function loadStore(){
+  const p=new URLSearchParams({db:$('sDb').value,resolved:$('sFilter').value,limit:'300'});
+  if($('sRun').value)p.set('run_id',$('sRun').value);
+  if($('sSymbol').value.trim())p.set('symbol',$('sSymbol').value.trim());
+  setStatus('Reading the prediction store …');
+  try{
+    const [pr,ac]=await Promise.all([
+      fetch('/api/daily/predictions?'+p).then(r=>r.json()),
+      fetch('/api/daily/accuracy?'+new URLSearchParams({db:$('sDb').value})).then(r=>r.json())]);
+    if(pr.error){setStatus('Error: '+pr.error,true);return;}
+    setStatus(''); renderStore(pr,ac);
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+async function resolveDue(){
+  setStatus('Fetching realised prices and scoring every prediction whose horizon has elapsed …');
+  const c=controls();
+  const p=new URLSearchParams({db:$('sDb').value,source:c.source,apikey:c.apikey,csvdir:c.csvdir});
+  try{
+    const d=await fetch('/api/daily/resolve?'+p).then(r=>r.json());
+    if(d.error){setStatus('Error: '+d.error,true);return;}
+    setStatus(`Resolved ${d.resolved} of ${d.due} due prediction(s).`);
+    loadStore();
+  }catch(e){setStatus('Request failed: '+e,true);}
+}
+function renderStore(pr,ac){
+  const st=(ac&&ac.stats)||{}, o=(ac&&ac.overall)||{};
+  let h='<div class="metgrid">'+
+    card('Runs',st.runs||0)+card('Predictions',st.predictions||0)+
+    card('Resolved',st.outcomes||0)+card('Symbols',st.symbols_tracked||0)+
+    (o.resolved?card('MAPE',num(o.mape_pct)+'%'):'')+
+    (o.resolved?card('Skill vs naive',o.skill_vs_naive==null?'–':fmtPct(o.skill_vs_naive*100,1)):'')+
+    (o.resolved?card('80% coverage',num(o.coverage_80_pct)+'%'):'')+
+    (o.resolved?card('Direction',num(o.directional_accuracy_pct)+'%'):'')+'</div>';
+  if(o.note)h+=`<div class="note">${esc(o.note)}</div>`;
+  const rows=pr.rows||[];
+  if(!rows.length){h+='<div class="kv">No predictions stored yet — run the Daily Report tab first.</div>';
+    $('storeResults').innerHTML=h;return;}
+  h+=`<table><thead><tr><th>Run</th><th class="lft">Symbol</th><th class="lft">Made</th><th class="lft">Target</th><th>Last</th>
+    <th>Forecast</th><th>Actual</th><th>Error</th><th>vs naive</th><th>In 80%</th><th>Dir</th>
+    <th class="lft">Distribution</th></tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const resolved=r.actual_price!=null;
+    h+=`<tr><td>#${r.run_id}</td><td class="lft"><b>${esc(r.symbol)}</b></td>
+      <td class="muted lft">${esc(String(r.asof||'').slice(0,10))}</td>
+      <td class="muted lft">${esc(String(r.target_date||''))}</td>
+      <td>${num(r.last_close)}</td><td>${num(r.forecast_price)}</td>
+      <td>${resolved?num(r.actual_price):'<span class="muted">open</span>'}</td>
+      <td class="${resolved?(r.error_pct<5?'ok':'bad'):'muted'}">${resolved?num(r.error_pct)+'%':'–'}</td>
+      <td class="${!resolved?'muted':(r.beat_naive?'ok':'bad')}">${!resolved?'–':(r.beat_naive?'better':'worse')}</td>
+      <td class="${!resolved?'muted':(r.within_80?'ok':'bad')}">${!resolved?'–':(r.within_80?'✓':'✗')}</td>
+      <td class="${!resolved?'muted':(r.direction_correct?'ok':'bad')}">${!resolved?'–':(r.direction_correct?'✓':'✗')}</td>
+      <td class="lft">${bandCell(r)}</td></tr>`;});
+  h+='</tbody></table>';
+  const lb=(ac&&ac.by_symbol)||[];
+  if(lb.length){
+    h+='<h3 style="margin-top:18px">Realised accuracy by symbol</h3>';
+    h+=`<table><thead><tr><th class="lft">Symbol</th><th>Resolved</th><th>MAPE</th><th>Naive MAPE</th>
+      <th>Skill</th><th>Direction</th><th>80% coverage</th></tr></thead><tbody>`;
+    lb.forEach(r=>{h+=`<tr><td class="lft"><b>${esc(r.symbol)}</b></td><td>${r.resolved}</td>
+      <td>${num(r.mape_pct)}%</td><td class="muted">${num(r.naive_mape_pct)}%</td>
+      <td class="${r.skill_vs_naive>0?'ok':'bad'}">${r.skill_vs_naive==null?'–':fmtPct(r.skill_vs_naive*100,1)}</td>
+      <td>${num(r.directional_accuracy_pct)}%</td><td>${num(r.coverage_80_pct)}%</td></tr>`;});
+    h+='</tbody></table>';
+  }
+  h+=`<div class="hint" style="margin-top:8px">Amber marker = where the price actually landed.
+     "Open" rows have not reached their target date yet and are never counted in any hit rate.</div>`;
+  $('storeResults').innerHTML=h;
 }
 
 toggleSourceFields(); loadChart();

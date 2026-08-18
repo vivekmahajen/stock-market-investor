@@ -25,6 +25,11 @@ from . import (
 )
 from .alerts import Alert, AlertStore
 from .analysis import analyze, build_signal, classify_regime, confluence_score, propose_signal
+from .daily import (render_daily, render_daily_html, render_daily_markdown,
+                    render_daily_text, report_from_store, run_daily)
+from .forecast import backtest_forecast, compare_methods, forecast, prob_above
+from .store import PredictionStore
+from .universe import NASDAQ_TOP10, resolve_universe, static_universe
 from .backtest import run_backtest, verdict
 from .robustness import (parameter_sensitivity, sub_period_analysis,
                          train_test_split, walk_forward)
@@ -39,7 +44,8 @@ from .options import bs_greeks, bs_price, build_chain, implied_vol, option_analy
 from .paper import PaperBroker
 from .chart_patterns import detect_classical
 from .patterns import pattern_base_rate
-from .data import AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider, SyntheticProvider
+from .data import (AlphaVantageProvider, CSVProvider, DataProvider, StooqProvider,
+                   SyntheticProvider, YahooProvider)
 from .fibonacci import auto_fibonacci
 from .harmonics import detect_harmonics
 from .portfolio import (benchmark_comparison, optimize_portfolio,
@@ -49,7 +55,7 @@ from .screen import run_screen
 from .tools import ToolRegistry
 from .types import OHLCV, Bar, Quote
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "chart_patterns",
@@ -103,11 +109,26 @@ __all__ = [
     "CalibrationLog",
     "SignalRecord",
     "SignalJournal",
+    "forecast",
+    "backtest_forecast",
+    "compare_methods",
+    "prob_above",
+    "run_daily",
+    "report_from_store",
+    "render_daily",
+    "render_daily_text",
+    "render_daily_markdown",
+    "render_daily_html",
+    "PredictionStore",
+    "resolve_universe",
+    "static_universe",
+    "NASDAQ_TOP10",
     "ToolRegistry",
     "DataProvider",
     "SyntheticProvider",
     "CSVProvider",
     "StooqProvider",
+    "YahooProvider",
     "AlphaVantageProvider",
     "OHLCV",
     "Bar",

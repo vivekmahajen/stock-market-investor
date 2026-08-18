@@ -144,6 +144,20 @@ Built: `CalibrationLog` (Brier, ECE, reliability buckets).
 
 Also fixed: `SyntheticProvider` now uses a stable FNV-1a hash so demo data is reproducible across processes (Python's `hash()` is per-process salted).
 
+## K. Daily report, forecasting & the prediction store (§20–22) ✅ DONE
+Built: the scheduled daily run over a universe, a horizon price distribution, and the table every report is generated from.
+
+- [x] K1. `atlas/universe.py` — named universes; NASDAQ top 10 as a **dated snapshot** plus live market-cap re-ranking, both carrying `ranking_source` provenance. A refresh that can't cover the universe falls back and says so.
+- [x] K2. `atlas/forecast.py` — horizon distribution from an EWMA volatility and a drift *shrunk* toward zero against a stated prior and capped at one horizon sigma; lognormal 80%/95% bands, P(up), and `prob_above`. Methods: `naive` / `drift` / `blend`.
+- [x] K3. `backtest_forecast` / `compare_methods` — walk-forward skill: MAPE vs the naive random walk, directional hit rate, and **interval coverage** (the check that catches a band that only holds 60% of the time). Verdicts state negative skill plainly.
+- [x] K4. `atlas/store.py` — SQLite `runs` / `predictions` / `outcomes` / `reports`; outcome resolution against the last bar at or before the target date; accuracy and the per-symbol leaderboard over resolved rows only.
+- [x] K5. `atlas/daily.py` — `run_daily` (one fetch per symbol, reused for analysis + forecast + skill), `report_from_store` (regenerate from the table, annotated with outcomes), and text / Markdown / self-contained HTML renderers.
+- [x] K6. Tool registry + CLI — `get_universe`, `forecast_price`, `compare_forecast_methods`, `run_daily_report`, `query_predictions`, `report_from_store`, `resolve_predictions`, `forecast_accuracy`, `render_report`; CLI `daily`, `forecast`, `predictions {runs,list,report,resolve,accuracy,export,stats}`.
+- [x] K7. Dashboard — **Daily Report** and **Predictions** tabs with distribution bars, a per-row model detail panel, realised-accuracy cards, resolve-due, and HTML/CSV export.
+- [x] K8. Prompt — Sections 20–22 in the main system prompt, plus a narrow single-purpose prompt for the unattended scheduled run.
+
+Also added: `analyze()` accepts a caller-supplied `series`, so a ten-symbol report costs ten data requests instead of twenty on a rate-limited feed.
+
 ---
 
 ## Suggested order
