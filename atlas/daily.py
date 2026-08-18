@@ -113,6 +113,7 @@ def _symbol_row(registry, symbol: str, run_date: date, horizon_days: int,
         "simulated": fetched["provenance"].get("simulated", False),
     }
 
+    row["data_warning"] = fc.get("data_warning")
     if check_events:
         row["event_in_horizon"] = _event_flag(registry, symbol, asof_date, horizon_days)
     return row
@@ -188,6 +189,8 @@ def run_daily_report(registry, universe: str = "nasdaq10", horizon_days: int = 3
                     interval_95=row["interval_95"], p_up=row["p_up"], method=method,
                     skill_score=row["skill_score"], created=run_date.isoformat(),
                 )
+            if row.get("data_warning"):
+                notes.append(f"{sym}: {row['data_warning']}")
         else:
             notes.append(f"{sym} excluded from summary: {row['error']}")
 
