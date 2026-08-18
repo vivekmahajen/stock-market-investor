@@ -243,6 +243,12 @@ def main(argv=None) -> int:
     pfc.add_argument("--compare", action="store_true",
                      help="score every method over identical walk-forward origins")
 
+    pdg = sub.add_parser("diag", parents=[common],
+                         help="diagnose a data feed: recent bars, spacing, largest moves, vol")
+    pdg.add_argument("symbol")
+    pdg.add_argument("--timeframe", default="1d")
+    pdg.add_argument("--lookback", type=int, default=400)
+
     pft = sub.add_parser("fetch", parents=[common],
                          help="download full history to CSV cache for offline --csv use")
     pft.add_argument("symbols", help="comma-separated tickers, e.g. AAPL,MSFT,NVDA")
@@ -506,6 +512,42 @@ def main(argv=None) -> int:
             else:
                 print(render_report(report, fmt=args.report_format))
                 return 0
+    elif args.cmd == "diag":
+        import math as _math
+
+        fetched = reg.get_ohlcv(args.symbol, args.timeframe, args.lookback)
+        if "error" in fetched:
+            out = fetched
+        else:
+            s = fetched["_series"]
+            closes = list(s.close)
+            ts = list(s.ts)
+            # Day gaps between consecutive bars (reveals weekly/monthly mislabelled as daily).
+            gaps = [(ts[i] - ts[i - 1]).days for i in range(1, len(ts))]
+            rets = [(_math.log(closes[i] / closes[i - 1]) if closes[i - 1] > 0 and closes[i] > 0 else None)
+                    for i in range(1, len(closes))]
+            valid = [(abs(r), ts[i + 1].date().isoformat(), round(r * 100, 1))
+                     for i, r in enumerate(rets) if r is not None]
+            valid.sort(reverse=True)
+            import statistics as _stats
+            rr = [r for r in rets if r is not None]
+            daily_sigma = _stats.pstdev(rr) if len(rr) > 1 else 0.0
+            out = {
+                "symbol": args.symbol.upper(),
+                "provider": getattr(reg.provider, "source", "?"),
+                "bars": len(s),
+                "asof": s.asof.isoformat() if s.asof else None,
+                "median_gap_days": (sorted(gaps)[len(gaps) // 2] if gaps else None),
+                "max_gap_days": (max(gaps) if gaps else None),
+                "recent": [{"date": ts[i].date().isoformat(), "close": round(closes[i], 2)}
+                           for i in range(max(0, len(closes) - 10), len(closes))],
+                "largest_daily_moves_pct": [{"date": d, "move_pct": mv} for _, d, mv in valid[:5]],
+                "daily_vol_pct": round(daily_sigma * 100, 2),
+                "annualized_vol_pct": round(daily_sigma * _math.sqrt(252) * 100, 1),
+            }
+        print(json.dumps(out, indent=2, default=str))
+        return 0
+
     elif args.cmd == "forecast":
         if args.compare:
             out = reg.compare_forecast_methods(args.symbol, horizon_days=args.horizon,
