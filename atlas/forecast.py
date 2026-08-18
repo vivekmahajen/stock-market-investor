@@ -164,16 +164,28 @@ def _project(last_close: float, drift_step: float, sigma_step: float, steps: int
 
 
 def _walk_forward_skill(closes: Sequence[float], steps: int, window: int, method: str,
-                        max_folds: int = 60) -> Optional[Dict[str, object]]:
+                        max_folds: int = 60, min_folds: int = 3,
+                        min_window: int = 40) -> Optional[Dict[str, object]]:
     """Out-of-sample forecast error vs. a random-walk baseline.
 
     At each anchor ``t`` fit the *same* model on the trailing window, project
     ``steps`` ahead, and compare its median to the realised close ``steps`` later.
     The naive baseline is the anchor close itself (a driftless random walk). Also
-    tracks directional accuracy and 80%-interval coverage. ``None`` when there
-    are too few folds to say anything.
+    tracks directional accuracy and 80%-interval coverage.
+
+    The fitting window auto-shrinks to whatever the history can support so a
+    short (e.g. ~100-bar) series still yields a measured — if noisy — skill number
+    instead of silence. Returns ``None`` only when even a minimal window can't
+    produce ``min_folds`` folds, i.e. the history is genuinely too short.
     """
     n = len(closes)
+    # Largest fitting window that still leaves room for min_folds folds after the
+    # warm-up: folds = n - steps - w - 1 >= min_folds  =>  w <= n - steps - min_folds - 1.
+    max_feasible_w = n - steps - min_folds - 1
+    if max_feasible_w < min_window:
+        return None  # genuinely too little history to measure skill
+    window = min(window, max_feasible_w)
+
     logret_full = [None] * n
     for i in range(1, n):
         if closes[i - 1] > 0 and closes[i] > 0:
@@ -340,14 +352,39 @@ def compare_methods(closes: Sequence[float], horizon_days: int = 30,
     for m in methods:
         sk = _walk_forward_skill(closes, steps, eff_window, _METHOD_ALIASES.get(m, m))
         rows.append({"method": m, "skill": sk})
-    scored = [r for r in rows if r["skill"] and r["skill"]["skill_score"] is not None]
-    best = max(scored, key=lambda r: r["skill"]["skill_score"], default=None)
-    best_method = best["method"] if (best and best["skill"]["skill_score"] > 0) else "naive"
+    scored = [r for r in rows if r["skill"] and r["skill"].get("skill_score") is not None]
+
+    # No skill could be MEASURED (too little history) is not the same as skill
+    # measured to be zero/negative. Never assert "no edge" from an absent measurement.
+    if not scored:
+        return {
+            "horizon_days": horizon_days,
+            "horizon_trading_days": steps,
+            "methods": rows,
+            "best_method": "naive",
+            "skill_measured": False,
+            "note": (f"insufficient history to measure out-of-sample skill "
+                     f"({len(closes)} bars; a ~{eff_window + steps + 5}-bar minimum is "
+                     f"needed for this horizon). Using naive as the safe default — the "
+                     f"point forecast is unvalidated, so read the interval, not the point."),
+        }
+
+    best = max(scored, key=lambda r: r["skill"]["skill_score"])
+    beats = best["skill"]["skill_score"] > 0
+    noisy = any(r["skill"].get("noise_dominated") for r in scored)
+    note = (f"best method ({best['method']}) beats a random walk out-of-sample "
+            f"(skill {best['skill']['skill_score']:+.2f}, {best['skill']['folds']} folds)"
+            if beats else
+            "no method beats a random walk out-of-sample; use naive and read the interval")
+    if noisy:
+        note += (". Note: fewer than ~30 walk-forward folds — this comparison is "
+                 "noise-dominated; treat the ranking as tentative, not decisive.")
     return {
         "horizon_days": horizon_days,
         "horizon_trading_days": steps,
         "methods": rows,
-        "best_method": best_method,
-        "note": ("best method beats a random walk" if best and best["skill"]["skill_score"] > 0
-                 else "no method beats a random walk out-of-sample; use naive and read the interval"),
+        "best_method": best["method"] if beats else "naive",
+        "skill_measured": True,
+        "noise_dominated": noisy,
+        "note": note,
     }
