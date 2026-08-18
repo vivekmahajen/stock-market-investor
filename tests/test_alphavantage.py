@@ -50,17 +50,17 @@ def test_url_has_function_and_key():
     assert "outputsize=compact" in url  # lookback <= 100
 
 
-def test_free_tier_daily_uses_full_for_large_lookback():
-    # TIME_SERIES_DAILY (non-adjusted) serves 'full' on the FREE tier — only
-    # DAILY_ADJUSTED is premium — so a big daily lookback must request full so the
-    # walk-forward skill check has enough history.
+def test_free_tier_never_requests_full():
+    # outputsize=full is a PREMIUM feature on Alpha Vantage (daily and intraday) —
+    # a free key requesting full gets an error, not compact — so the free tier
+    # must stay compact even for large lookbacks.
     p, calls = _provider(_DAILY_CSV)  # premium defaults to False
     p.get_ohlcv("AAPL", "1d", 500)
-    assert "outputsize=full" in calls["urls"][0]
+    assert "outputsize=compact" in calls["urls"][0]
+    assert "outputsize=full" not in calls["urls"][0]
 
 
 def test_free_tier_intraday_stays_compact():
-    # Intraday extended history IS premium-only; free intraday stays compact.
     calls = {"urls": []}
     intraday = "timestamp,open,high,low,close,volume\n2024-01-05 19:55:00,1,2,0.5,1.5,100\n"
     p = AlphaVantageProvider(api_key="K", premium=False,
