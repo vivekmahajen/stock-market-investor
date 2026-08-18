@@ -1,4 +1,4 @@
-from .provider import DataProvider, SyntheticProvider, CSVProvider, parse_ohlcv_csv
+from .provider import DataProvider, SyntheticProvider, CSVProvider, parse_ohlcv_csv, write_ohlcv_csv
 from .stooq import StooqProvider
 from .alphavantage import AlphaVantageProvider
 
@@ -9,4 +9,5 @@ __all__ = [
     "StooqProvider",
     "AlphaVantageProvider",
     "parse_ohlcv_csv",
+    "write_ohlcv_csv",
 ]
