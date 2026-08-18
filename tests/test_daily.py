@@ -317,6 +317,32 @@ def test_report_from_store_is_renderable(tmp_path):
 # --------------------------------------------------------------------------- #
 # registry tool surface
 # --------------------------------------------------------------------------- #
+def test_cli_daily_writes_unicode_to_cp1252_stream(tmp_path):
+    """Regression: the ⚠ banner / en-dashes must not crash on a cp1252 stdout
+    (Windows console default). ``main`` forces UTF-8 on stdout."""
+    import io
+    import sys
+
+    from atlas.cli import main
+
+    out_path = tmp_path / "report.html"
+    saved = sys.stdout
+    try:
+        sys.stdout = io.TextIOWrapper(open(out_path, "wb"), encoding="cp1252")
+        rc = main(["daily", "run", "--report-format", "html", "--no-store"])
+        sys.stdout.flush()
+    finally:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        sys.stdout = saved
+    assert rc == 0
+    data = out_path.read_text(encoding="utf-8")
+    assert "⚠" in data  # the warning glyph survived, UTF-8 encoded
+    assert data.startswith("<!doctype")
+
+
 def test_registry_daily_tools():
     reg = ToolRegistry()
     u = reg.get_universe("nasdaq10")

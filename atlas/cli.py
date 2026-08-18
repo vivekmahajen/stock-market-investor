@@ -45,6 +45,15 @@ def _ema_cross_signal(fast: int = 20, slow: int = 50):
 
 
 def main(argv=None) -> int:
+    # Reports carry Unicode (⚠ banners, en/em dashes). Windows consoles default
+    # to cp1252, which can't encode them and crashes on print/redirect — force
+    # UTF-8 on stdout/stderr so `atlas ... > report.html` works everywhere.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
+
     p = argparse.ArgumentParser(prog="atlas", description="ATLAS compute-layer CLI")
     # Shared data-source flags, added to every subcommand via `parents=` so they
     # work whether placed before or after the subcommand.
