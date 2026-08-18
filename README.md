@@ -180,6 +180,38 @@ Pick **Synthetic** (demo, no key), **Alpha Vantage** (enter your free key; toggl
 fundamentals/news/events), or **CSV** (reads `SYMBOL_1d.csv` from a folder). It is
 a *local* development server bound to localhost — not hardened for public exposure.
 
+### Daily forecast report (scheduled job)
+
+`atlas daily` is a self-contained, unattended job: it forecasts a fixed universe's
+30-day **price distribution** (default: the ten largest NASDAQ listings), writes
+every prediction to a store *before* the market can move, resolves predictions
+whose horizon has elapsed, and tracks realised accuracy against a random-walk
+baseline. It is built for cron — no human answers a clarifying question; it takes
+the documented default, notes the assumption, and finishes. The system prompt for
+the job lives in [`prompts/atlas-daily-report-prompt.md`](prompts/atlas-daily-report-prompt.md).
+
+```bash
+# Produce today's report (HTML artefact) and persist the predictions
+python -m atlas.cli daily run --report-format html --store ./predictions.json > report.html
+
+# Text/Markdown for a message or a document; JSON for a pipeline
+python -m atlas.cli daily run --report-format text
+python -m atlas.cli daily run --universe nasdaq5 --horizon 30 --method drift
+
+# Resolve elapsed predictions, then read the realised track record
+python -m atlas.cli daily resolve  --store ./predictions.json
+python -m atlas.cli daily accuracy --store ./predictions.json
+python -m atlas.cli daily replay   --store ./predictions.json --report-format markdown
+```
+
+Every forecast is a distribution, never a target: each row carries a median, an
+80%/95% interval, P(up), and the model's **measured walk-forward skill vs. a random
+walk** on that symbol's own history — rows where the model has no edge say so.
+Accuracy is computed only from resolved predictions; under ~10 resolved it is shown
+as a running tally, not a hit rate. Simulated and stale data are banner-flagged at
+the top, and any symbol that fails to fetch is listed with its error and excluded
+from the summary — never dropped silently.
+
 ### Real market data
 
 Data sources plug into the same `DataProvider` seam:
