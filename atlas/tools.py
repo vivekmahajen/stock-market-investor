@@ -27,9 +27,11 @@ from .types import OHLCV, Provenance
 class ToolRegistry:
     """Holds a data provider and exposes the Section 3 tools as methods."""
 
-    def __init__(self, provider: Optional[DataProvider] = None, alert_store: Optional[AlertStore] = None):
+    def __init__(self, provider: Optional[DataProvider] = None, alert_store: Optional[AlertStore] = None,
+                 prediction_store=None):
         self.provider = provider or SyntheticProvider()
         self.alerts = alert_store or AlertStore()
+        self.predictions = prediction_store  # lazily created by daily-report tools
 
     # --- market data -----------------------------------------------------
     def get_ohlcv(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> dict:
@@ -290,6 +292,59 @@ class ToolRegistry:
             if "_series" in f:
                 out.append(self.alerts.evaluate(alert, f["_series"]))
         return out
+
+    # --- daily report (Section 3 of the daily-report prompt) -------------
+    def _pred_store(self, path: Optional[str] = None):
+        from .predictions import PredictionStore
+        if self.predictions is None or (path and getattr(self.predictions, "path", None) != path):
+            self.predictions = PredictionStore(path or "atlas_predictions.json")
+        return self.predictions
+
+    def get_universe(self, name: str = "nasdaq10", refresh: bool = False) -> dict:
+        from .universe import get_universe
+        return get_universe(name, refresh=refresh, provider=self.provider)
+
+    def forecast_price(self, symbol: str, horizon_days: int = 30, method: str = "drift",
+                       with_skill: bool = True, timeframe: str = "1d", lookback: int = 400) -> dict:
+        from .forecast import forecast_price
+        f = self.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in f:
+            return {"symbol": symbol, "error": f["error"]}
+        series = f["_series"]
+        out = forecast_price(list(series.close), horizon_days=horizon_days,
+                             method=method, with_skill=with_skill)
+        out["symbol"] = symbol
+        out["asof"] = series.asof.isoformat() if series.asof else None
+        out["simulated"] = f["provenance"].get("simulated", False)
+        return out
+
+    def run_daily_report(self, universe: str = "nasdaq10", horizon_days: int = 30,
+                         method: str = "drift", store_path: Optional[str] = None,
+                         refresh: bool = False, asof: Optional[str] = None,
+                         check_events: bool = True, **kwargs) -> dict:
+        from .daily import run_daily_report
+        store = self._pred_store(store_path) if store_path is not None else None
+        return run_daily_report(self, universe=universe, horizon_days=horizon_days,
+                                method=method, store=store, refresh=refresh, asof=asof,
+                                check_events=check_events, **kwargs)
+
+    def resolve_predictions(self, store_path: Optional[str] = None,
+                            asof: Optional[str] = None) -> dict:
+        from .daily import resolve_predictions
+        return resolve_predictions(self, self._pred_store(store_path), asof=asof)
+
+    def forecast_accuracy(self, store_path: Optional[str] = None, symbol: Optional[str] = None,
+                          horizon_days: Optional[int] = None) -> dict:
+        from .daily import forecast_accuracy
+        return forecast_accuracy(self._pred_store(store_path), symbol=symbol, horizon_days=horizon_days)
+
+    def report_from_store(self, store_path: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+        from .daily import report_from_store
+        return report_from_store(self._pred_store(store_path), run_id=run_id)
+
+    def render_report(self, report: dict, fmt: str = "text") -> str:
+        from .daily import render_report
+        return render_report(report, fmt=fmt)
 
 
 def _last(seq):

@@ -1,0 +1,328 @@
+"""Tests for the ATLAS Daily Report subsystem.
+
+Covers the forecast engine (distribution + walk-forward skill), the universe
+resolver (resolved not recalled, with fallback), the prediction store
+(log → resolve → aggregate), and the daily orchestrator + renderers.
+"""
+from __future__ import annotations
+
+import math
+import os
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from atlas.daily import (forecast_accuracy, render_report, report_from_store,
+                         resolve_predictions, run_daily_report)
+from atlas.forecast import forecast_price, horizon_trading_days
+from atlas.predictions import PredictionStore, accuracy_stats, target_date
+from atlas.tools import ToolRegistry
+from atlas.types import OHLCV, Bar
+from atlas.universe import get_universe, list_universes
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _synthetic_closes(n=400, mu=0.0004, sigma=0.012, start=100.0, seed=7):
+    """Deterministic lognormal walk (no dependency on random module)."""
+    closes = [start]
+    state = seed
+    for _ in range(n - 1):
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        u1 = (state / 0x7FFFFFFF) or 1e-9
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        u2 = state / 0x7FFFFFFF
+        z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+        closes.append(closes[-1] * math.exp(mu + sigma * z))
+    return closes
+
+
+class DatedProvider:
+    """Minimal provider returning a fixed dated OHLCV for any symbol."""
+
+    simulated = False
+    source = "test"
+
+    def __init__(self, closes, start_date="2026-01-01"):
+        self._closes = closes
+        self._start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+
+    def get_ohlcv(self, symbol, timeframe, lookback):
+        bars = []
+        for i, c in enumerate(self._closes):
+            ts = self._start + timedelta(days=i)
+            bars.append(Bar(ts=ts, open=c, high=c * 1.01, low=c * 0.99, close=c, volume=1e6))
+        series = OHLCV.from_bars(symbol, timeframe, bars)
+        return series.tail(lookback) if lookback else series
+
+    def get_quote(self, symbol):  # pragma: no cover - unused here
+        raise NotImplementedError
+
+    def provenance(self, tool, symbol, timeframe, lookback):
+        from atlas.types import Provenance
+        return Provenance(tool=tool, symbol=symbol, timeframe=timeframe,
+                          lookback=lookback, source=self.source, simulated=False)
+
+
+# --------------------------------------------------------------------------- #
+# forecast_price
+# --------------------------------------------------------------------------- #
+def test_forecast_price_shape():
+    closes = _synthetic_closes(300)
+    fc = forecast_price(closes, horizon_days=30, method="drift", with_skill=True)
+    assert "error" not in fc
+    lo80, hi80 = fc["interval_80"]
+    lo95, hi95 = fc["interval_95"]
+    # Intervals bracket the median and 95% is wider than 80%.
+    assert lo80 < fc["median"] < hi80
+    assert lo95 <= lo80 and hi95 >= hi80
+    assert 0.0 <= fc["p_up"] <= 1.0
+    assert fc["horizon_trading_days"] == horizon_trading_days(30)
+
+
+def test_forecast_price_refuses_short_history():
+    fc = forecast_price([100.0, 101.0, 102.0], horizon_days=30)
+    assert "error" in fc
+
+
+def test_forecast_price_zero_drift_has_pup_half():
+    closes = _synthetic_closes(300)
+    fc = forecast_price(closes, horizon_days=30, method="zero_drift", with_skill=False)
+    assert abs(fc["p_up"] - 0.5) < 1e-9  # no drift => symmetric
+
+
+def test_forecast_skill_reports_baseline():
+    closes = _synthetic_closes(400)
+    fc = forecast_price(closes, horizon_days=30, method="drift", with_skill=True)
+    sk = fc["skill"]
+    assert sk is not None
+    assert sk["folds"] >= 3
+    assert "skill_score" in sk and "beats_random_walk" in sk
+    assert 0.0 <= sk["directional_accuracy"] <= 1.0
+    assert sk["in_sample"] is False  # skill is out-of-sample by construction
+
+
+def test_forecast_flat_history_rejected():
+    fc = forecast_price([100.0] * 200, horizon_days=30)
+    assert "error" in fc  # zero volatility => no distribution
+
+
+# --------------------------------------------------------------------------- #
+# universe
+# --------------------------------------------------------------------------- #
+def test_universe_static_snapshot():
+    u = get_universe("nasdaq10")
+    assert len(u["constituents"]) == 10
+    assert u["ranking_source"] == "static_snapshot"
+    assert u["as_of"]
+
+
+def test_universe_unknown_errors():
+    u = get_universe("does_not_exist")
+    assert "error" in u and u["constituents"] == []
+
+
+def test_universe_refresh_without_feed_falls_back():
+    u = get_universe("nasdaq10", refresh=True, provider=None)
+    assert u["ranking_source"] == "static_snapshot"
+    assert any("no fundamentals feed" in n for n in u["notes"])
+
+
+def test_universe_live_rerank():
+    class FundProvider:
+        source = "fund"
+        _caps = None
+
+        def get_fundamentals(self, sym):
+            caps = {"AAA": "300", "BBB": "100", "CCC": "200"}
+            return {"MarketCapitalization": caps.get(sym, "50")}
+
+    # Monkey-patch the snapshot to a 3-name universe by using nasdaq5 subset? Use
+    # a provider that covers the real candidates.
+    import atlas.universe as U
+    U._SNAPSHOTS["_test3"] = {"as_of": "2026-01-01", "description": "t",
+                              "constituents": ["AAA", "BBB", "CCC"]}
+    try:
+        u = get_universe("_test3", refresh=True, provider=FundProvider())
+        assert u["ranking_source"] == "live_market_cap"
+        assert u["constituents"] == ["AAA", "CCC", "BBB"]  # 300 > 200 > 100
+    finally:
+        del U._SNAPSHOTS["_test3"]
+
+
+def test_list_universes():
+    assert "nasdaq10" in list_universes()
+
+
+# --------------------------------------------------------------------------- #
+# prediction store
+# --------------------------------------------------------------------------- #
+def test_store_log_and_persist(tmp_path):
+    p = str(tmp_path / "s.json")
+    store = PredictionStore(p)
+    store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
+                         last_close=100.0, median=105.0, interval_80=[95, 115],
+                         interval_95=[90, 120], p_up=0.6, method="drift", skill_score=0.1)
+    assert store.save()
+    reloaded = PredictionStore(p)
+    assert len(reloaded.records) == 1
+    assert reloaded.records[0]["target_date"] == "2026-01-31"
+
+
+def test_store_log_idempotent_per_run(tmp_path):
+    store = PredictionStore(str(tmp_path / "s.json"))
+    for _ in range(3):
+        store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
+                             last_close=100.0, median=105.0, interval_80=[95, 115],
+                             interval_95=[90, 120], p_up=0.6, method="drift")
+    assert len(store.records) == 1  # same (run_id, symbol) replaces
+
+
+def test_store_resolve_and_accuracy(tmp_path):
+    store = PredictionStore(str(tmp_path / "s.json"))
+    store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
+                         last_close=100.0, median=105.0, interval_80=[95, 115],
+                         interval_95=[90, 120], p_up=0.6, method="drift")
+    series = [("2026-01-25", 101.0), ("2026-02-01", 108.0), ("2026-02-10", 110.0)]
+    res = store.resolve(lambda s: series, asof="2026-02-15")
+    assert res["resolved_now"] == 1 and res["open_remaining"] == 0
+    acc = store.accuracy_stats()
+    assert acc["resolved_count"] == 1
+    assert acc["sufficient"] is False  # < 10
+    # realized close is the first bar >= target (2026-02-01 = 108).
+    assert acc["mape_model_pct"] == pytest.approx(abs(105 - 108) / 108 * 100)
+    assert acc["model_beats_naive"] is True
+    assert acc["directional_accuracy"] == 1.0
+
+
+def test_store_does_not_resolve_before_target(tmp_path):
+    store = PredictionStore(str(tmp_path / "s.json"))
+    store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
+                         last_close=100.0, median=105.0, interval_80=[95, 115],
+                         interval_95=[90, 120], p_up=0.6, method="drift")
+    # Series ends before the 2026-01-31 target -> stays open.
+    series = [("2026-01-10", 101.0), ("2026-01-20", 102.0)]
+    res = store.resolve(lambda s: series)
+    assert res["resolved_now"] == 0 and res["open_remaining"] == 1
+
+
+def test_accuracy_stats_empty():
+    acc = accuracy_stats([])
+    assert acc["resolved_count"] == 0 and acc["sufficient"] is False
+
+
+def test_target_date_helper():
+    assert target_date("2026-01-01", 30).isoformat() == "2026-01-31"
+
+
+# --------------------------------------------------------------------------- #
+# daily orchestrator
+# --------------------------------------------------------------------------- #
+def test_run_daily_report_synthetic():
+    reg = ToolRegistry()
+    rep = run_daily_report(reg, universe="nasdaq5", store=None)
+    assert rep["kind"] == "atlas_daily_report"
+    assert len(rep["rows"]) == 5
+    assert rep["simulated"] is True  # synthetic feed
+    assert rep["ranking_source"] == "static_snapshot"
+    assert rep["summary"]["count"] == 5
+    # Every successful row carries an interval and a P(up) — a distribution.
+    for r in rep["rows"]:
+        if "error" not in r:
+            assert r["interval_80"][0] < r["median"] < r["interval_80"][1]
+            assert 0.0 <= r["p_up"] <= 1.0
+
+
+def test_run_daily_report_persists_and_resolves(tmp_path):
+    # The report anchors to the newest bar the feed has. To resolve later, the
+    # feed must have advanced *past* each prediction's target — so the report
+    # sees a truncated history, and resolution sees more future bars.
+    closes = _synthetic_closes(300)
+    report_reg = ToolRegistry(DatedProvider(closes[:200], start_date="2026-01-01"))
+    store = PredictionStore(str(tmp_path / "s.json"))
+    rep = run_daily_report(report_reg, universe="nasdaq5", store=store, asof="2026-07-19")
+    assert rep["persisted"] is True
+    assert rep["simulated"] is False
+    assert len(store.records) >= 1
+
+    # Feed has advanced ~100 days: predictions' 30-day horizons have elapsed.
+    resolve_reg = ToolRegistry(DatedProvider(closes[:300], start_date="2026-01-01"))
+    res = resolve_predictions(resolve_reg, store)
+    assert res["resolved_now"] >= 1
+    acc = forecast_accuracy(store, horizon_days=30)
+    assert acc["resolved_count"] >= 1
+    assert "directional_accuracy" in acc
+
+
+def test_daily_report_bad_universe():
+    reg = ToolRegistry()
+    rep = run_daily_report(reg, universe="nope", store=None)
+    assert "error" in rep
+
+
+def test_render_report_text_has_banners_and_disclaimer():
+    reg = ToolRegistry()
+    rep = run_daily_report(reg, universe="nasdaq5", store=None)
+    text = render_report(rep, "text")
+    assert "SIMULATED DATA" in text  # synthetic feed banner
+    assert "not financial advice" in text
+    assert "REALISED ACCURACY" in text
+    # No forbidden target language in the forecast rows/summary. (The disclaimer
+    # legitimately says forecasts are "not price targets" — check the body only.)
+    body = text.split("Educational analysis")[0].lower()
+    for banned in ("will reach", "price target", "target of", "on track for"):
+        assert banned not in body
+
+
+def test_render_report_markdown_and_html():
+    reg = ToolRegistry()
+    rep = run_daily_report(reg, universe="nasdaq5", store=None)
+    md = render_report(rep, "markdown")
+    assert md.startswith(">") or md.startswith("#")
+    assert "| Symbol |" in md
+    html = render_report(rep, "html")
+    assert html.startswith("<!doctype")
+    assert "<title>ATLAS Daily Report</title>" in html
+    assert "banner" in html  # simulated banner div present
+
+
+def test_report_from_store_replay(tmp_path):
+    reg = ToolRegistry()
+    store = PredictionStore(str(tmp_path / "s.json"))
+    run_daily_report(reg, universe="nasdaq5", store=store)
+    replay = report_from_store(store)
+    assert replay["kind"] == "atlas_daily_report_replay"
+    assert len(replay["rows"]) == 5
+
+
+def test_report_from_store_empty(tmp_path):
+    store = PredictionStore(str(tmp_path / "s.json"))
+    assert "error" in report_from_store(store)
+
+
+def test_report_from_store_is_renderable(tmp_path):
+    reg = ToolRegistry()
+    store = PredictionStore(str(tmp_path / "s.json"))
+    run_daily_report(reg, universe="nasdaq5", store=store, asof="2026-08-18")
+    replay = report_from_store(store)
+    # run_id (with a dashed date) parses back to the universe + run date.
+    assert replay["universe"] == "nasdaq5"
+    assert replay["run_date"] == "2026-08-18"
+    text = render_report(replay, "text")
+    assert "ATLAS DAILY REPORT — NASDAQ5" in text
+    assert render_report(replay, "html").startswith("<!doctype")
+
+
+# --------------------------------------------------------------------------- #
+# registry tool surface
+# --------------------------------------------------------------------------- #
+def test_registry_daily_tools():
+    reg = ToolRegistry()
+    u = reg.get_universe("nasdaq10")
+    assert len(u["constituents"]) == 10
+    f = reg.forecast_price("AAA", horizon_days=30)
+    assert "median" in f and "skill" in f
+    rep = reg.run_daily_report(universe="nasdaq5")
+    assert rep["summary"]["count"] == 5
+    assert reg.render_report(rep, "text").count("\n") > 5

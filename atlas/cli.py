@@ -197,6 +197,28 @@ def main(argv=None) -> int:
     po.add_argument("--vol", type=float, default=None, help="volatility (to price)")
     po.add_argument("--price", type=float, default=None, help="market price (to imply vol)")
 
+    pdr = sub.add_parser("daily", parents=[common],
+                         help="ATLAS Daily Report: NASDAQ-top-10 30-day forecast")
+    pdr.add_argument("action", nargs="?", default="run",
+                     choices=["run", "resolve", "accuracy", "replay"],
+                     help="run the report (default), resolve elapsed predictions, "
+                          "show realised accuracy, or replay a stored run")
+    pdr.add_argument("--universe", default="nasdaq10", help="universe key (default nasdaq10)")
+    pdr.add_argument("--horizon", type=int, default=30, help="forecast horizon in calendar days")
+    pdr.add_argument("--method", default="drift", choices=["drift", "zero_drift"],
+                     help="forecast method (drift default; zero_drift = random-walk baseline)")
+    pdr.add_argument("--lookback", type=int, default=400, help="bars of history to fetch")
+    pdr.add_argument("--refresh", action="store_true",
+                     help="live-rerank the universe by market cap (needs a fundamentals feed)")
+    pdr.add_argument("--no-events", action="store_true", help="skip the earnings-calendar check")
+    pdr.add_argument("--store", default="atlas_predictions.json",
+                     help="prediction-store JSON path (persists forecasts & outcomes)")
+    pdr.add_argument("--no-store", action="store_true", help="do not persist predictions")
+    pdr.add_argument("--asof", default=None, help="override the run date (YYYY-MM-DD, for backfills)")
+    pdr.add_argument("--run-id", default=None, help="replay: which stored run to reconstruct")
+    pdr.add_argument("--report-format", default="text", choices=["text", "markdown", "html", "json"],
+                     help="rendered artefact format (default text)")
+
     args = p.parse_args(argv)
 
     if args.cmd == "serve":
@@ -389,6 +411,31 @@ def main(argv=None) -> int:
         from .options import option_analysis
         out = option_analysis(args.spot, args.strike, args.dte / 365.0, args.rate,
                               kind=args.kind, q=args.div_yield, sigma=args.vol, price=args.price)
+    elif args.cmd == "daily":
+        from .daily import (forecast_accuracy, render_report, report_from_store,
+                            resolve_predictions, run_daily_report)
+        from .predictions import PredictionStore
+        store = None if args.no_store else PredictionStore(args.store)
+        if args.action == "resolve":
+            out = resolve_predictions(reg, store or PredictionStore(args.store), asof=args.asof)
+        elif args.action == "accuracy":
+            out = forecast_accuracy(store or PredictionStore(args.store), horizon_days=args.horizon)
+        elif args.action == "replay":
+            report = report_from_store(store or PredictionStore(args.store), run_id=args.run_id)
+            out = report if args.report_format == "json" else None
+            if out is None:
+                print(render_report(report, fmt=args.report_format))
+                return 0
+        else:  # run
+            report = run_daily_report(reg, universe=args.universe, horizon_days=args.horizon,
+                                      method=args.method, lookback=args.lookback,
+                                      refresh=args.refresh, store=store, asof=args.asof,
+                                      check_events=not args.no_events)
+            if args.report_format == "json":
+                out = report
+            else:
+                print(render_report(report, fmt=args.report_format))
+                return 0
     else:  # pragma: no cover
         p.error("unknown command")
         return 2
