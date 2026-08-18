@@ -25,18 +25,29 @@ def _provider(payload):
     return p, calls
 
 
-def test_url_uses_max_range_for_daily():
-    p, calls = _provider(_chart([1577836800], [1], [2], [0.5], [1.5], [100]))
-    p.get_ohlcv("AAPL", "1d", 0)
-    url = calls["urls"][0]
-    assert "range=max" in url and "interval=1d" in url and "/chart/AAPL" in url
+def test_daily_url_uses_period_window_not_range_max():
+    # range=max silently downsamples long histories; an explicit period window
+    # is served at true daily resolution.
+    p = YahooProvider(fetch=lambda u: "{}")
+    url = p._url("AAPL", "1d", 0)
+    assert "range=max" not in url
+    assert "interval=1d" in url and "period1=" in url and "period2=" in url
+    assert "includeadjustedclose=true" in url.lower()
 
 
 def test_intraday_uses_bounded_range():
-    p, _ = _provider(_chart([1577836800], [1], [2], [0.5], [1.5], [100]))
-    assert "range=60d" in p._url("AAPL", "5m")
-    assert "interval=5m" in p._url("AAPL", "5m")
+    p = YahooProvider(fetch=lambda u: "{}")
+    assert "range=60d" in p._url("AAPL", "5m") and "interval=5m" in p._url("AAPL", "5m")
     assert "range=730d" in p._url("AAPL", "1h")
+
+
+def test_downsampled_daily_data_is_refused():
+    # Monthly-spaced timestamps labelled 1d must be caught, not silently used.
+    monthly = [1577836800 + i * 31 * 86400 for i in range(6)]
+    c = [10, 11, 12, 13, 14, 15]
+    p, _ = _provider(_chart(monthly, c, [x + 1 for x in c], [x - 1 for x in c], c, [1] * 6))
+    with pytest.raises(RuntimeError, match="downsampled"):
+        p.get_ohlcv("AAPL", "1d", 0)
 
 
 def test_parse_basic_series():

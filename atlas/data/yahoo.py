@@ -29,13 +29,16 @@ from typing import Callable, List, Optional
 
 from ..types import OHLCV, Bar, Provenance, Quote
 
-_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={rng}&interval={interval}"
+_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{query}"
 
 # ATLAS timeframe -> Yahoo interval code.
 _INTERVAL = {
     "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "60m",
     "1d": "1d", "1w": "1wk", "1mo": "1mo", "1M": "1mo",
 }
+_INTRADAY_CODES = ("1m", "5m", "15m", "30m", "60m")
+# Approximate calendar days per bar, to size an explicit daily-resolution window.
+_CAL_DAYS_PER_BAR = {"1d": 1.6, "1wk": 8.0, "1mo": 32.0}
 
 FetchFn = Callable[[str], str]
 
@@ -64,34 +67,57 @@ def _http_get(url: str, timeout: float = 30.0) -> str:
         return resp.read().decode(charset, errors="replace")
 
 
-def _range_for(interval: str) -> str:
-    """Widest history Yahoo allows for a given interval."""
-    if interval in ("1d", "1wk", "1mo"):
-        return "max"
-    if interval in ("60m", "1h"):
-        return "730d"
-    return "60d"  # minute intervals are capped short by Yahoo
+def _intraday_range(interval: str) -> str:
+    """Bounded range Yahoo serves at true intraday resolution."""
+    return "730d" if interval == "60m" else "60d"
 
 
 class YahooProvider:
-    """Real historical OHLCV from Yahoo Finance (free, no key). Long history."""
+    """Real historical OHLCV from Yahoo Finance (free, no key). Long history.
+
+    For end-of-day intervals the URL uses an explicit ``period1``/``period2``
+    window rather than ``range=max``: Yahoo silently *downsamples* ``range=max``
+    for long histories (returning monthly/quarterly points labelled ``1d``),
+    which would wreck any volatility estimate. An explicit period window is served
+    at true daily resolution — the same approach yfinance uses.
+    """
 
     simulated = False
     source = "yahoo"
+    # Default daily-resolution window (calendar days) when the full history is
+    # requested (lookback=0). ~30 years of daily bars — long enough for a
+    # many-fold skill check, short enough that Yahoo keeps it at daily resolution.
+    _FULL_WINDOW_DAYS = 30 * 366
 
     def __init__(self, fetch: Optional[FetchFn] = None, timeout: float = 30.0):
         self.timeout = timeout
         self._fetch = fetch or (lambda url: _http_get(url, self.timeout))
         self.last_skipped_rows = 0
 
-    def _url(self, symbol: str, timeframe: str) -> str:
+    def _now_unix(self) -> int:
+        return int(datetime.now(timezone.utc).timestamp())
+
+    def _url(self, symbol: str, timeframe: str, lookback: int = 0) -> str:
         if timeframe not in _INTERVAL:
             raise ValueError(
                 f"Unsupported timeframe '{timeframe}'. Use one of {sorted(_INTERVAL)}."
             )
         interval = _INTERVAL[timeframe]
-        return _CHART_URL.format(symbol=symbol.strip().upper(), rng=_range_for(interval),
-                                 interval=interval)
+        sym = symbol.strip().upper()
+        if interval in _INTRADAY_CODES:
+            # Intraday history is short; Yahoo serves it correctly via range=.
+            query = f"range={_intraday_range(interval)}&interval={interval}"
+            return _CHART_BASE.format(symbol=sym, query=query)
+        # EOD: explicit period window at TRUE resolution (avoids range=max downsampling).
+        period2 = self._now_unix() + 86400
+        if lookback and lookback > 0:
+            span_days = int(lookback * _CAL_DAYS_PER_BAR.get(interval, 1.6)) + 400
+        else:
+            span_days = self._FULL_WINDOW_DAYS
+        period1 = max(0, period2 - span_days * 86400)
+        query = (f"period1={period1}&period2={period2}&interval={interval}"
+                 f"&includeAdjustedClose=true")
+        return _CHART_BASE.format(symbol=sym, query=query)
 
     # --- parsing (pure, testable) ---------------------------------------
     def parse_json(self, text: str, symbol: str, timeframe: str) -> OHLCV:
@@ -170,9 +196,32 @@ class YahooProvider:
 
     # --- DataProvider interface -----------------------------------------
     def get_ohlcv(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> OHLCV:
-        text = self._fetch(self._url(symbol, timeframe))
+        text = self._fetch(self._url(symbol, timeframe, lookback))
         series = self.parse_json(text, symbol, timeframe)
+        self._check_resolution(series, symbol, timeframe)
         return series.tail(lookback) if lookback else series
+
+    @staticmethod
+    def _check_resolution(series: OHLCV, symbol: str, timeframe: str) -> None:
+        """Guard against Yahoo silently downsampling (monthly points as '1d').
+
+        A daily series has a median bar-gap of 1 day (weekends/holidays aside);
+        if the median gap is many days, the payload is coarser than requested and
+        every volatility number derived from it would be nonsense.
+        """
+        expected = {"1d": 1, "1w": 7, "1mo": 31}.get(timeframe)
+        if expected is None or len(series) < 3:
+            return
+        ts = series.ts
+        gaps = sorted((ts[i] - ts[i - 1]).days for i in range(1, len(ts)))
+        median_gap = gaps[len(gaps) // 2]
+        if median_gap > expected * 3 + 2:
+            raise RuntimeError(
+                f"Yahoo returned coarser-than-{timeframe} data for '{symbol}' "
+                f"(median bar gap {median_gap}d, expected ~{expected}d) — the feed "
+                f"downsampled the request. Refusing rather than compute volatility "
+                f"from mislabelled bars."
+            )
 
     def get_quote(self, symbol: str) -> Quote:
         series = self.get_ohlcv(symbol, "1d", 1)
