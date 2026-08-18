@@ -22,13 +22,13 @@ from .tools import ToolRegistry
 
 
 def _registry(args) -> ToolRegistry:
+    if getattr(args, "yahoo", False):
+        return ToolRegistry(YahooProvider())
     if getattr(args, "alpha_vantage", False):
         return ToolRegistry(AlphaVantageProvider(
             api_key=getattr(args, "api_key", None),
             premium=getattr(args, "premium", False),
         ))
-    if getattr(args, "yahoo", False):
-        return ToolRegistry(YahooProvider())
     if getattr(args, "stooq", False):
         return ToolRegistry(StooqProvider())
     if getattr(args, "csv", None):
@@ -201,6 +201,54 @@ def main(argv=None) -> int:
     pp.add_argument("--cash", type=float, default=100_000)
     pp.add_argument("--store", default="atlas_paper.json")
 
+    pdl = sub.add_parser("daily", parents=[common],
+                         help="daily forecast report over a universe (default: NASDAQ top 10)")
+    pdl.add_argument("--universe", default="nasdaq10", help="named universe (nasdaq10, nasdaq_megacap)")
+    pdl.add_argument("--symbols", default=None, help="comma-separated symbols, overrides --universe")
+    pdl.add_argument("--horizon", type=int, default=30, help="forecast horizon in calendar days")
+    pdl.add_argument("--method", default="drift", choices=["naive", "drift", "blend"])
+    pdl.add_argument("--timeframe", default="1d")
+    pdl.add_argument("--lookback", type=int, default=400)
+    pdl.add_argument("--benchmark", default="QQQ", help="relative-strength benchmark ('' to skip)")
+    pdl.add_argument("--refresh-universe", action="store_true",
+                     help="re-rank constituents by live market cap (needs a fundamentals feed)")
+    pdl.add_argument("--no-skill", action="store_true",
+                     help="skip the per-symbol walk-forward skill check (faster)")
+    pdl.add_argument("--fundamentals", action="store_true")
+    pdl.add_argument("--sentiment", action="store_true")
+    pdl.add_argument("--events", action="store_true")
+    pdl.add_argument("--db", default="atlas_predictions.db", help="SQLite prediction store")
+    pdl.add_argument("--no-store", action="store_true", help="do not persist this run")
+    pdl.add_argument("--out", default=None, help="also write the rendered report to this file")
+    pdl.add_argument("--render", default=None, choices=["text", "markdown", "html"],
+                     help="rendered format (defaults to --format's text, or markdown with --out)")
+
+    pfc = sub.add_parser("forecast", parents=[common], help="horizon price forecast for one symbol")
+    pfc.add_argument("symbol")
+    pfc.add_argument("--horizon", type=int, default=30)
+    pfc.add_argument("--method", default="drift", choices=["naive", "drift", "blend"])
+    pfc.add_argument("--timeframe", default="1d")
+    pfc.add_argument("--lookback", type=int, default=400)
+    pfc.add_argument("--no-skill", action="store_true", help="skip the walk-forward skill check")
+    pfc.add_argument("--compare", action="store_true", help="score every method over the same origins")
+
+    ppr = sub.add_parser("predictions", parents=[common],
+                         help="query / resolve / score the stored prediction table")
+    ppr.add_argument("action", choices=["list", "runs", "report", "resolve", "accuracy", "export", "stats"])
+    ppr.add_argument("--db", default="atlas_predictions.db")
+    ppr.add_argument("--run-id", type=int, default=None)
+    ppr.add_argument("--symbol", default=None)
+    ppr.add_argument("--universe", default=None)
+    ppr.add_argument("--open", dest="only_open", action="store_true", help="unresolved predictions only")
+    ppr.add_argument("--resolved", dest="only_resolved", action="store_true",
+                     help="resolved predictions only")
+    ppr.add_argument("--asof", default=None, help="resolve as of this date (default: today)")
+    ppr.add_argument("--horizon", type=int, default=None)
+    ppr.add_argument("--limit", type=int, default=200)
+    ppr.add_argument("--lookback", type=int, default=400)
+    ppr.add_argument("--render", default="text", choices=["text", "markdown", "html"])
+    ppr.add_argument("--out", default=None, help="write the rendered report to this file")
+
     po = sub.add_parser("option", parents=[common], help="Black-Scholes price + greeks (+ implied vol)")
     po.add_argument("--spot", type=float, required=True)
     po.add_argument("--strike", type=float, required=True)
@@ -211,44 +259,6 @@ def main(argv=None) -> int:
     po.add_argument("--vol", type=float, default=None, help="volatility (to price)")
     po.add_argument("--price", type=float, default=None, help="market price (to imply vol)")
 
-    pdr = sub.add_parser("daily", parents=[common],
-                         help="ATLAS Daily Report: NASDAQ-top-10 30-day forecast")
-    pdr.add_argument("action", nargs="?", default="run",
-                     choices=["run", "resolve", "accuracy", "replay"],
-                     help="run the report (default), resolve elapsed predictions, "
-                          "show realised accuracy, or replay a stored run")
-    pdr.add_argument("--universe", default="nasdaq10", help="universe key (default nasdaq10)")
-    pdr.add_argument("--horizon", type=int, default=30, help="forecast horizon in calendar days")
-    pdr.add_argument("--method", default="drift", choices=["drift", "blend", "naive"],
-                     help="forecast method (drift default; naive = random-walk baseline; "
-                          "blend = drift + capped momentum)")
-    pdr.add_argument("--lookback", type=int, default=400, help="bars of history to fetch")
-    pdr.add_argument("--refresh", action="store_true",
-                     help="live-rerank the universe by market cap (needs a fundamentals feed)")
-    pdr.add_argument("--no-events", action="store_true", help="skip the earnings-calendar check")
-    pdr.add_argument("--store", default="atlas_predictions.json",
-                     help="prediction-store JSON path (persists forecasts & outcomes)")
-    pdr.add_argument("--no-store", action="store_true", help="do not persist predictions")
-    pdr.add_argument("--asof", default=None, help="override the run date (YYYY-MM-DD, for backfills)")
-    pdr.add_argument("--run-id", default=None, help="replay: which stored run to reconstruct")
-    pdr.add_argument("--report-format", default="text", choices=["text", "markdown", "html", "json"],
-                     help="rendered artefact format (default text)")
-
-    pfc = sub.add_parser("forecast", parents=[common],
-                         help="horizon price distribution for one symbol (§21)")
-    pfc.add_argument("symbol")
-    pfc.add_argument("--horizon", type=int, default=30, help="horizon in calendar days")
-    pfc.add_argument("--method", default="drift", choices=["drift", "blend", "naive"])
-    pfc.add_argument("--lookback", type=int, default=400)
-    pfc.add_argument("--compare", action="store_true",
-                     help="score every method over identical walk-forward origins")
-
-    pdg = sub.add_parser("diag", parents=[common],
-                         help="diagnose a data feed: recent bars, spacing, largest moves, vol")
-    pdg.add_argument("symbol")
-    pdg.add_argument("--timeframe", default="1d")
-    pdg.add_argument("--lookback", type=int, default=400)
-
     pft = sub.add_parser("fetch", parents=[common],
                          help="download full history to CSV cache for offline --csv use")
     pft.add_argument("symbols", help="comma-separated tickers, e.g. AAPL,MSFT,NVDA")
@@ -257,13 +267,11 @@ def main(argv=None) -> int:
     pft.add_argument("--lookback", type=int, default=0,
                      help="bars to keep (0 = full available history, the default)")
 
-    pqp = sub.add_parser("predictions", parents=[common],
-                         help="read the prediction store (§22)")
-    pqp.add_argument("--store", default="atlas_predictions.json")
-    pqp.add_argument("--run-id", default=None)
-    pqp.add_argument("--symbol", default=None)
-    pqp.add_argument("--resolved", choices=["true", "false"], default=None,
-                     help="filter to resolved / open predictions only")
+    pdg = sub.add_parser("diag", parents=[common],
+                         help="diagnose a data feed: recent bars, spacing, largest moves, vol")
+    pdg.add_argument("symbol")
+    pdg.add_argument("--timeframe", default="1d")
+    pdg.add_argument("--lookback", type=int, default=400)
 
     args = p.parse_args(argv)
 
@@ -303,6 +311,39 @@ def main(argv=None) -> int:
         return 0 if any("bars" in w for w in written) else 1
 
     reg = _registry(args)
+
+    if args.cmd == "diag":
+        import math as _math
+        import statistics as _stats
+
+        fetched = reg.get_ohlcv(args.symbol, args.timeframe, args.lookback)
+        if "error" in fetched:
+            print(json.dumps(fetched, indent=2, default=str))
+            return 1
+        s = fetched["_series"]
+        closes, ts = list(s.close), list(s.ts)
+        gaps = [(ts[i] - ts[i - 1]).days for i in range(1, len(ts))]
+        rets = [(_math.log(closes[i] / closes[i - 1]) if closes[i - 1] > 0 and closes[i] > 0 else None)
+                for i in range(1, len(closes))]
+        valid = sorted(((abs(r), ts[i + 1].date().isoformat(), round(r * 100, 1))
+                        for i, r in enumerate(rets) if r is not None), reverse=True)
+        rr = [r for r in rets if r is not None]
+        daily_sigma = _stats.pstdev(rr) if len(rr) > 1 else 0.0
+        out = {
+            "symbol": args.symbol.upper(),
+            "provider": getattr(reg.provider, "source", "?"),
+            "bars": len(s),
+            "asof": s.asof.isoformat() if s.asof else None,
+            "median_gap_days": (sorted(gaps)[len(gaps) // 2] if gaps else None),
+            "max_gap_days": (max(gaps) if gaps else None),
+            "recent": [{"date": ts[i].date().isoformat(), "close": round(closes[i], 2)}
+                       for i in range(max(0, len(closes) - 10), len(closes))],
+            "largest_daily_moves_pct": [{"date": d, "move_pct": mv} for _, d, mv in valid[:5]],
+            "daily_vol_pct": round(daily_sigma * 100, 2),
+            "annualized_vol_pct": round(daily_sigma * _math.sqrt(252) * 100, 1),
+        }
+        print(json.dumps(out, indent=2, default=str))
+        return 0
 
     if args.cmd == "analyze":
         out = analyze(args.symbol, registry=reg, timeframe=args.timeframe,
@@ -483,82 +524,94 @@ def main(argv=None) -> int:
             out = {"reset": True, "account": broker.to_dict()}
         else:  # status
             out = broker.to_dict(include_trades=True)
+    elif args.cmd == "daily":
+        from .daily import render_daily, run_daily
+        from .store import PredictionStore
+        symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
+        store = None if args.no_store else PredictionStore(args.db)
+        try:
+            out = run_daily(
+                registry=reg, universe=args.universe, symbols=symbols,
+                horizon_days=args.horizon, method=args.method, timeframe=args.timeframe,
+                lookback=args.lookback, benchmark=(args.benchmark or None),
+                with_fundamentals=args.fundamentals, with_sentiment=args.sentiment,
+                with_events=args.events, refresh_universe=args.refresh_universe,
+                with_skill=not args.no_skill, store=store, persist=not args.no_store,
+            )
+            fmt = args.render or ("markdown" if args.out else "text")
+            if args.out or args.format == "text" or args.render:
+                rendered = render_daily(out, fmt)
+                if args.out:
+                    with open(args.out, "w", encoding="utf-8") as fh:
+                        fh.write(rendered)
+                    if store is not None:
+                        store.record_report(out.get("run_id"), fmt, rendered,
+                                            title=f"ATLAS Daily {out['run_date']}", path=args.out)
+                    out["written_to"] = args.out
+                if args.format == "text" or args.render:
+                    print(rendered)
+                    if args.out:
+                        print(f"\n[written to {args.out}]")
+                    return 0
+        finally:
+            if store is not None:
+                store.close()
+    elif args.cmd == "forecast":
+        if args.compare:
+            out = reg.compare_forecast_methods(args.symbol, horizon_days=args.horizon,
+                                               timeframe=args.timeframe,
+                                               lookback=max(args.lookback, 750))
+        else:
+            out = reg.forecast_price(args.symbol, horizon_days=args.horizon, method=args.method,
+                                     timeframe=args.timeframe, lookback=args.lookback,
+                                     with_skill=not args.no_skill)
+    elif args.cmd == "predictions":
+        from .daily import render_daily, report_from_store
+        from .store import PredictionStore
+        store = PredictionStore(args.db)
+        try:
+            if args.action == "runs":
+                out = {"runs": store.runs(limit=args.limit)}
+            elif args.action == "list":
+                resolved = True if args.only_resolved else (False if args.only_open else None)
+                rows = store.predictions(run_id=args.run_id, symbol=args.symbol,
+                                         resolved=resolved, limit=args.limit)
+                out = {"count": len(rows), "rows": rows}
+            elif args.action == "accuracy":
+                out = {"overall": store.accuracy(symbol=args.symbol, horizon_days=args.horizon),
+                       "by_symbol": store.leaderboard()}
+            elif args.action == "stats":
+                out = store.stats()
+            elif args.action == "export":
+                csv_text = store.export_csv(run_id=args.run_id, symbol=args.symbol)
+                if args.out:
+                    with open(args.out, "w", encoding="utf-8") as fh:
+                        fh.write(csv_text)
+                    out = {"written_to": args.out, "bytes": len(csv_text)}
+                else:
+                    print(csv_text)
+                    return 0
+            elif args.action == "resolve":
+                out = store.resolve_due(reg, asof=args.asof, lookback=args.lookback)
+                out["accuracy"] = store.accuracy()
+            else:  # report
+                rep = report_from_store(store, run_id=args.run_id, universe=args.universe)
+                rendered = render_daily(rep, args.render) if "error" not in rep else rep["error"]
+                if args.out:
+                    with open(args.out, "w", encoding="utf-8") as fh:
+                        fh.write(rendered)
+                    store.record_report(rep.get("run_id"), args.render, rendered,
+                                        title=f"ATLAS Daily {rep.get('run_date')}", path=args.out)
+                    print(f"[written to {args.out}]")
+                else:
+                    print(rendered)
+                return 0
+        finally:
+            store.close()
     elif args.cmd == "option":
         from .options import option_analysis
         out = option_analysis(args.spot, args.strike, args.dte / 365.0, args.rate,
                               kind=args.kind, q=args.div_yield, sigma=args.vol, price=args.price)
-    elif args.cmd == "daily":
-        from .daily import (forecast_accuracy, render_report, report_from_store,
-                            resolve_predictions, run_daily_report)
-        from .predictions import PredictionStore
-        store = None if args.no_store else PredictionStore(args.store)
-        if args.action == "resolve":
-            out = resolve_predictions(reg, store or PredictionStore(args.store), asof=args.asof)
-        elif args.action == "accuracy":
-            out = forecast_accuracy(store or PredictionStore(args.store), horizon_days=args.horizon)
-        elif args.action == "replay":
-            report = report_from_store(store or PredictionStore(args.store), run_id=args.run_id)
-            out = report if args.report_format == "json" else None
-            if out is None:
-                print(render_report(report, fmt=args.report_format))
-                return 0
-        else:  # run
-            report = run_daily_report(reg, universe=args.universe, horizon_days=args.horizon,
-                                      method=args.method, lookback=args.lookback,
-                                      refresh=args.refresh, store=store, asof=args.asof,
-                                      check_events=not args.no_events)
-            if args.report_format == "json":
-                out = report
-            else:
-                print(render_report(report, fmt=args.report_format))
-                return 0
-    elif args.cmd == "diag":
-        import math as _math
-
-        fetched = reg.get_ohlcv(args.symbol, args.timeframe, args.lookback)
-        if "error" in fetched:
-            out = fetched
-        else:
-            s = fetched["_series"]
-            closes = list(s.close)
-            ts = list(s.ts)
-            # Day gaps between consecutive bars (reveals weekly/monthly mislabelled as daily).
-            gaps = [(ts[i] - ts[i - 1]).days for i in range(1, len(ts))]
-            rets = [(_math.log(closes[i] / closes[i - 1]) if closes[i - 1] > 0 and closes[i] > 0 else None)
-                    for i in range(1, len(closes))]
-            valid = [(abs(r), ts[i + 1].date().isoformat(), round(r * 100, 1))
-                     for i, r in enumerate(rets) if r is not None]
-            valid.sort(reverse=True)
-            import statistics as _stats
-            rr = [r for r in rets if r is not None]
-            daily_sigma = _stats.pstdev(rr) if len(rr) > 1 else 0.0
-            out = {
-                "symbol": args.symbol.upper(),
-                "provider": getattr(reg.provider, "source", "?"),
-                "bars": len(s),
-                "asof": s.asof.isoformat() if s.asof else None,
-                "median_gap_days": (sorted(gaps)[len(gaps) // 2] if gaps else None),
-                "max_gap_days": (max(gaps) if gaps else None),
-                "recent": [{"date": ts[i].date().isoformat(), "close": round(closes[i], 2)}
-                           for i in range(max(0, len(closes) - 10), len(closes))],
-                "largest_daily_moves_pct": [{"date": d, "move_pct": mv} for _, d, mv in valid[:5]],
-                "daily_vol_pct": round(daily_sigma * 100, 2),
-                "annualized_vol_pct": round(daily_sigma * _math.sqrt(252) * 100, 1),
-            }
-        print(json.dumps(out, indent=2, default=str))
-        return 0
-
-    elif args.cmd == "forecast":
-        if args.compare:
-            out = reg.compare_forecast_methods(args.symbol, horizon_days=args.horizon,
-                                               lookback=args.lookback)
-        else:
-            out = reg.forecast_price(args.symbol, horizon_days=args.horizon,
-                                     method=args.method, lookback=args.lookback)
-    elif args.cmd == "predictions":
-        resolved = {"true": True, "false": False}.get(args.resolved)
-        out = reg.query_predictions(store_path=args.store, run_id=args.run_id,
-                                    symbol=args.symbol, resolved=resolved)
     else:  # pragma: no cover
         p.error("unknown command")
         return 2

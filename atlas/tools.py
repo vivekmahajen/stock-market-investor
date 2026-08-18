@@ -27,11 +27,9 @@ from .types import OHLCV, Provenance
 class ToolRegistry:
     """Holds a data provider and exposes the Section 3 tools as methods."""
 
-    def __init__(self, provider: Optional[DataProvider] = None, alert_store: Optional[AlertStore] = None,
-                 prediction_store=None):
+    def __init__(self, provider: Optional[DataProvider] = None, alert_store: Optional[AlertStore] = None):
         self.provider = provider or SyntheticProvider()
         self.alerts = alert_store or AlertStore()
-        self.predictions = prediction_store  # lazily created by daily-report tools
 
     # --- market data -----------------------------------------------------
     def get_ohlcv(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> dict:
@@ -285,6 +283,105 @@ class ToolRegistry:
             return {"error": str(e)}
         return alert.to_dict()
 
+    # --- forecasting, the daily report, and the prediction store (§20-22) ---
+    def get_universe(self, name: str = "nasdaq10", refresh: bool = False, limit: int = 10) -> dict:
+        """Resolve a named universe (e.g. the NASDAQ top 10) with provenance."""
+        from .universe import resolve_universe
+
+        return resolve_universe(name, registry=self, refresh=refresh, limit=limit)
+
+    def forecast_price(self, symbol: str, horizon_days: int = 30, method: str = "drift",
+                       timeframe: str = "1d", lookback: int = 400,
+                       with_skill: bool = True) -> dict:
+        """Horizon price distribution for ``symbol`` plus its walk-forward skill.
+
+        The returned ``forecast_price`` is the median of a modelled distribution.
+        ``skill`` reports whether that model has ever beaten a random walk on this
+        symbol — read it before quoting the point forecast.
+        """
+        from .forecast import backtest_forecast, forecast
+
+        fetched = self.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in fetched:
+            return {"symbol": symbol, "error": fetched["error"]}
+        series = fetched["_series"]
+        out = forecast(series, horizon_days=horizon_days, method=method)
+        if "error" in out:
+            return out
+        out["simulated"] = fetched["provenance"].get("simulated", False)
+        out["provenance"] = fetched["provenance"]
+        if with_skill:
+            out["skill"] = backtest_forecast(series, horizon_days=horizon_days, method=method)
+        return out
+
+    def compare_forecast_methods(self, symbol: str, horizon_days: int = 30,
+                                 timeframe: str = "1d", lookback: int = 750) -> dict:
+        """Score every forecast method over identical origins so the ranking is fair."""
+        from .forecast import compare_methods
+
+        fetched = self.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in fetched:
+            return {"symbol": symbol, "error": fetched["error"]}
+        return compare_methods(fetched["_series"], horizon_days=horizon_days)
+
+    def run_daily_report(self, universe: str = "nasdaq10", horizon_days: int = 30,
+                         method: str = "drift", db_path: Optional[str] = None,
+                         persist: bool = True, **kwargs) -> dict:
+        """Run the daily forecast report over a universe and persist it (§20/§22)."""
+        from .daily import run_daily
+
+        return run_daily(registry=self, universe=universe, horizon_days=horizon_days,
+                         method=method, db_path=db_path, persist=persist, **kwargs)
+
+    def render_report(self, report: dict, fmt: str = "markdown") -> str:
+        """Render a report envelope as ``text``, ``markdown`` or ``html``."""
+        from .daily import render_daily
+
+        return render_daily(report, fmt)
+
+    def query_predictions(self, run_id: Optional[int] = None, symbol: Optional[str] = None,
+                          resolved: Optional[bool] = None, db_path: Optional[str] = None,
+                          limit: int = 200) -> dict:
+        """Read stored predictions (joined to outcomes) out of the table."""
+        from .store import DEFAULT_DB, PredictionStore
+
+        with PredictionStore(db_path or DEFAULT_DB) as store:
+            rows = store.predictions(run_id=run_id, symbol=symbol, resolved=resolved, limit=limit)
+            return {"count": len(rows), "rows": rows, "stats": store.stats()}
+
+    def report_from_store(self, run_id: Optional[int] = None, universe: Optional[str] = None,
+                          db_path: Optional[str] = None, fmt: Optional[str] = None) -> dict:
+        """Regenerate a stored report (optionally rendered) from the table alone."""
+        from .daily import render_daily, report_from_store
+        from .store import DEFAULT_DB, PredictionStore
+
+        with PredictionStore(db_path or DEFAULT_DB) as store:
+            rep = report_from_store(store, run_id=run_id, universe=universe)
+            if fmt and "error" not in rep:
+                rep["rendered"] = render_daily(rep, fmt)
+                rep["rendered_format"] = fmt
+            return rep
+
+    def resolve_predictions(self, asof: Optional[str] = None, db_path: Optional[str] = None,
+                            timeframe: str = "1d", lookback: int = 400) -> dict:
+        """Score every prediction whose horizon has elapsed against the realised close."""
+        from .store import DEFAULT_DB, PredictionStore
+
+        with PredictionStore(db_path or DEFAULT_DB) as store:
+            return store.resolve_due(self, asof=asof, timeframe=timeframe, lookback=lookback)
+
+    def forecast_accuracy(self, symbol: Optional[str] = None, horizon_days: Optional[int] = None,
+                          db_path: Optional[str] = None) -> dict:
+        """Realised accuracy over resolved predictions, plus the per-symbol leaderboard."""
+        from .store import DEFAULT_DB, PredictionStore
+
+        with PredictionStore(db_path or DEFAULT_DB) as store:
+            return {
+                "overall": store.accuracy(symbol=symbol, horizon_days=horizon_days),
+                "by_symbol": store.leaderboard(),
+                "stats": store.stats(),
+            }
+
     def check_alerts(self) -> List[dict]:
         out = []
         for alert in self.alerts.list_alerts(active_only=True):
@@ -292,76 +389,6 @@ class ToolRegistry:
             if "_series" in f:
                 out.append(self.alerts.evaluate(alert, f["_series"]))
         return out
-
-    # --- daily report (Section 3 of the daily-report prompt) -------------
-    def _pred_store(self, path: Optional[str] = None):
-        from .predictions import PredictionStore
-        if self.predictions is None or (path and getattr(self.predictions, "path", None) != path):
-            self.predictions = PredictionStore(path or "atlas_predictions.json")
-        return self.predictions
-
-    def get_universe(self, name: str = "nasdaq10", refresh: bool = False) -> dict:
-        from .universe import get_universe
-        return get_universe(name, refresh=refresh, provider=self.provider)
-
-    def forecast_price(self, symbol: str, horizon_days: int = 30, method: str = "drift",
-                       with_skill: bool = True, timeframe: str = "1d", lookback: int = 400) -> dict:
-        from .forecast import forecast_price
-        f = self.get_ohlcv(symbol, timeframe, lookback)
-        if "error" in f:
-            return {"symbol": symbol, "error": f["error"]}
-        series = f["_series"]
-        out = forecast_price(list(series.close), horizon_days=horizon_days,
-                             method=method, with_skill=with_skill)
-        out["symbol"] = symbol
-        out["asof"] = series.asof.isoformat() if series.asof else None
-        out["simulated"] = f["provenance"].get("simulated", False)
-        return out
-
-    def compare_forecast_methods(self, symbol: str, horizon_days: int = 30,
-                                 timeframe: str = "1d", lookback: int = 400) -> dict:
-        from .forecast import compare_methods
-        f = self.get_ohlcv(symbol, timeframe, lookback)
-        if "error" in f:
-            return {"symbol": symbol, "error": f["error"]}
-        out = compare_methods(list(f["_series"].close), horizon_days=horizon_days)
-        out["symbol"] = symbol
-        out["simulated"] = f["provenance"].get("simulated", False)
-        return out
-
-    def query_predictions(self, store_path: Optional[str] = None, run_id: Optional[str] = None,
-                          symbol: Optional[str] = None, resolved: Optional[bool] = None) -> dict:
-        store = self._pred_store(store_path)
-        recs = store.query(run_id=run_id, symbol=symbol, resolved=resolved)
-        return {"count": len(recs), "predictions": recs}
-
-    def run_daily_report(self, universe: str = "nasdaq10", horizon_days: int = 30,
-                         method: str = "drift", store_path: Optional[str] = None,
-                         refresh: bool = False, asof: Optional[str] = None,
-                         check_events: bool = True, **kwargs) -> dict:
-        from .daily import run_daily_report
-        store = self._pred_store(store_path) if store_path is not None else None
-        return run_daily_report(self, universe=universe, horizon_days=horizon_days,
-                                method=method, store=store, refresh=refresh, asof=asof,
-                                check_events=check_events, **kwargs)
-
-    def resolve_predictions(self, store_path: Optional[str] = None,
-                            asof: Optional[str] = None) -> dict:
-        from .daily import resolve_predictions
-        return resolve_predictions(self, self._pred_store(store_path), asof=asof)
-
-    def forecast_accuracy(self, store_path: Optional[str] = None, symbol: Optional[str] = None,
-                          horizon_days: Optional[int] = None) -> dict:
-        from .daily import forecast_accuracy
-        return forecast_accuracy(self._pred_store(store_path), symbol=symbol, horizon_days=horizon_days)
-
-    def report_from_store(self, store_path: Optional[str] = None, run_id: Optional[str] = None) -> dict:
-        from .daily import report_from_store
-        return report_from_store(self._pred_store(store_path), run_id=run_id)
-
-    def render_report(self, report: dict, fmt: str = "text") -> str:
-        from .daily import render_report
-        return render_report(report, fmt=fmt)
 
 
 def _last(seq):

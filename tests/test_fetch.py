@@ -46,8 +46,10 @@ def test_fetch_cli_writes_cache_then_csv_reads_it(tmp_path, monkeypatch, capsys)
     rc2 = cli.main(["forecast", "AAPL", "--compare", "--csv", out_dir])
     assert rc2 == 0
     cmp = json.loads(capsys.readouterr().out)
-    assert cmp["skill_measured"] is True
-    assert cmp["methods"][0]["skill"]["folds"] > 30  # not noise-dominated
+    # compare_methods scores every method over identical origins.
+    assert set(cmp["results"]) == {"naive", "drift", "blend"}
+    assert cmp["ranked_by_mape"]  # at least one method produced a MAPE
+    assert cmp["results"]["drift"]["samples"] > 30  # many-fold, not noise-dominated
 
 
 def test_fetch_cli_reports_per_symbol_errors(tmp_path, monkeypatch, capsys):
