@@ -234,6 +234,10 @@ from the summary — never dropped silently.
 Data sources plug into the same `DataProvider` seam:
 
 ```bash
+# 0. Yahoo Finance — free, no key, decades of daily history (best for real skill checks)
+python -m atlas.cli forecast AAPL --compare --yahoo
+python -m atlas.cli daily run --yahoo --store ./predictions.json --report-format html > report.html
+
 # 1. Alpha Vantage — real data with a free API key (recommended for live use)
 set ALPHAVANTAGE_API_KEY=YOURKEY        # Windows (cmd);  export on macOS/Linux
 python -m atlas.cli analyze AAPL --alpha-vantage
@@ -244,8 +248,9 @@ python -m atlas.cli analyze AAPL --csv ./mydata
 python -m atlas.cli backtest AAPL --csv ./mydata --lookback 600   # long history = real backtests
 
 # 2b. Fetch full history once into a CSV cache, then work offline against it.
-#     Stooq (free, no key, long daily history) is the default source.
+#     Yahoo Finance (free, no key, decades of daily history) is the default source.
 python -m atlas.cli fetch AAPL,MSFT,NVDA --out ./mydata
+python -m atlas.cli fetch AAPL --out ./mydata --alpha-vantage --api-key YOURKEY  # or AV / --stooq
 python -m atlas.cli forecast AAPL --compare --csv ./mydata   # many-fold skill, not noise
 python -m atlas.cli daily run --csv ./mydata --store ./predictions.json --report-format html > report.html
 

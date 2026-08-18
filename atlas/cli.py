@@ -15,7 +15,8 @@ import sys
 
 from .analysis import analyze, build_signal
 from .backtest import run_backtest, verdict
-from .data import AlphaVantageProvider, CSVProvider, StooqProvider, SyntheticProvider
+from .data import (AlphaVantageProvider, CSVProvider, StooqProvider, SyntheticProvider,
+                   YahooProvider)
 from .indicators import ema
 from .tools import ToolRegistry
 
@@ -26,6 +27,8 @@ def _registry(args) -> ToolRegistry:
             api_key=getattr(args, "api_key", None),
             premium=getattr(args, "premium", False),
         ))
+    if getattr(args, "yahoo", False):
+        return ToolRegistry(YahooProvider())
     if getattr(args, "stooq", False):
         return ToolRegistry(StooqProvider())
     if getattr(args, "csv", None):
@@ -59,6 +62,8 @@ def main(argv=None) -> int:
     # work whether placed before or after the subcommand.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--csv", help="directory of <SYMBOL>_<TF>.csv real-data files")
+    common.add_argument("--yahoo", action="store_true",
+                        help="use live Yahoo Finance data (free, no key; long daily history)")
     common.add_argument("--stooq", action="store_true", help="use live Stooq data (free, no key; EOD)")
     common.add_argument("--alpha-vantage", action="store_true",
                         help="use Alpha Vantage (needs a free API key)")
@@ -265,13 +270,15 @@ def main(argv=None) -> int:
         import os
 
         from .data import write_ohlcv_csv
-        # Default to Stooq — the free, no-key source with long daily history —
-        # unless the user explicitly picked another live source.
+        # Default to Yahoo — free, no key, long daily history, and not behind
+        # Stooq's anti-bot wall — unless the user explicitly picked another source.
         if getattr(args, "alpha_vantage", False):
             prov = AlphaVantageProvider(api_key=getattr(args, "api_key", None),
                                         premium=getattr(args, "premium", False))
-        else:
+        elif getattr(args, "stooq", False):
             prov = StooqProvider()
+        else:
+            prov = YahooProvider()
         os.makedirs(args.out, exist_ok=True)
         written = []
         for sym in [s.strip() for s in args.symbols.split(",") if s.strip()]:
