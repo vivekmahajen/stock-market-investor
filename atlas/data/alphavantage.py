@@ -109,15 +109,19 @@ class AlphaVantageProvider:
 
     def _url(self, symbol: str, timeframe: str, lookback: int) -> str:
         params = {"symbol": symbol.upper(), "apikey": self.api_key or "demo", "datatype": "csv"}
-        want_full = self.premium and lookback > 100  # 'full' is premium-only
         if timeframe in _INTRADAY:
             params["function"] = "TIME_SERIES_INTRADAY"
             params["interval"] = _INTRADAY[timeframe]
-            params["outputsize"] = "full" if want_full else "compact"
+            # Intraday 'full' (the extended 30-day history) is premium-only.
+            params["outputsize"] = "full" if (self.premium and lookback > 100) else "compact"
         elif timeframe in _SERIES_FUNC:
             params["function"] = _SERIES_FUNC[timeframe]
             if timeframe == "1d":
-                params["outputsize"] = "full" if want_full else "compact"
+                # TIME_SERIES_DAILY (non-adjusted) serves 'full' — 20+ years — on
+                # the FREE tier; only DAILY_ADJUSTED is premium. Request full
+                # whenever the caller wants more than the ~100-bar compact window,
+                # so the walk-forward skill check has history to work with.
+                params["outputsize"] = "full" if lookback > 100 else "compact"
         else:
             raise ValueError(
                 f"Unsupported timeframe '{timeframe}'. Use one of "

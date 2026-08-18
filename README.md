@@ -260,10 +260,12 @@ and intraday (`1m`–`1h`). Two free-tier limits to know:
 - **~25 requests/day** — suits single-symbol lookups (`analyze`, `signal`,
   `score`) more than wide screens or multi-symbol portfolios (one request per
   symbol).
-- **Daily history is capped at ~100 bars** on the free tier (`outputsize=full`
-  is premium-only). That's ample for the indicators, patterns, and regime logic;
-  only very long lookbacks (e.g. EMA200) are affected. Pass `--premium` (or
-  `AlphaVantageProvider(premium=True)`) with a premium key to unlock full history.
+- **Full daily history (20+ years) is free.** `TIME_SERIES_DAILY` (non-adjusted)
+  serves `outputsize=full` on the free tier — only `DAILY_ADJUSTED` is premium — so
+  any lookback over ~100 bars automatically requests full history. That gives the
+  walk-forward skill check enough data to actually measure whether the forecast
+  beats a random walk. **Intraday** extended history is still premium-only (free
+  intraday stays at the ~100-bar compact window); pass `--premium` for it.
 
 Alpha Vantage returns JSON on errors/rate-limits even in CSV mode — the provider
 detects those and raises a clear message instead of mis-parsing.

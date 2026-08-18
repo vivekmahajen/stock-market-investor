@@ -141,6 +141,33 @@ def test_compare_methods_scores_all():
     cmp = compare_methods(_synthetic_closes(400), horizon_days=30)
     assert {r["method"] for r in cmp["methods"]} == {"naive", "drift", "blend"}
     assert cmp["best_method"] in ("naive", "drift", "blend")
+    assert cmp["skill_measured"] is True
+
+
+def test_compare_methods_measures_skill_on_compact_history():
+    # ~100 bars (Alpha Vantage 'compact') must still yield a MEASURED, if noisy,
+    # skill — not null and not a fabricated "no edge" verdict.
+    from atlas.forecast import compare_methods, forecast_price
+    closes = _synthetic_closes(100)
+    fc = forecast_price(closes, horizon_days=30)
+    assert fc["skill"] is not None and fc["skill"]["noise_dominated"] is True
+    cmp = compare_methods(closes, horizon_days=30)
+    assert cmp["skill_measured"] is True
+    assert cmp["noise_dominated"] is True
+    assert "noise-dominated" in cmp["note"]
+
+
+def test_compare_methods_unmeasured_never_claims_no_edge():
+    # Just above the 60-bar forecast floor but too short for a 30-day walk-forward
+    # (min 40-bar fitting window + 21 steps + folds) => skill cannot be measured.
+    # The verdict must NOT assert "no edge".
+    from atlas.forecast import compare_methods
+    cmp = compare_methods(_synthetic_closes(62), horizon_days=30)
+    assert cmp["skill_measured"] is False
+    assert cmp["best_method"] == "naive"
+    assert "insufficient history" in cmp["note"]
+    assert "beats a random walk" not in cmp["note"]
+    assert "unvalidated" in cmp["note"]
 
 
 def test_registry_compare_and_query(tmp_path):
