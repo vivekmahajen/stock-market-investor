@@ -238,6 +238,14 @@ def main(argv=None) -> int:
     pfc.add_argument("--compare", action="store_true",
                      help="score every method over identical walk-forward origins")
 
+    pft = sub.add_parser("fetch", parents=[common],
+                         help="download full history to CSV cache for offline --csv use")
+    pft.add_argument("symbols", help="comma-separated tickers, e.g. AAPL,MSFT,NVDA")
+    pft.add_argument("--out", default="./mydata", help="directory to write <SYMBOL>_<TF>.csv into")
+    pft.add_argument("--timeframe", default="1d", help="bar timeframe (default 1d)")
+    pft.add_argument("--lookback", type=int, default=0,
+                     help="bars to keep (0 = full available history, the default)")
+
     pqp = sub.add_parser("predictions", parents=[common],
                          help="read the prediction store (§22)")
     pqp.add_argument("--store", default="atlas_predictions.json")
@@ -252,6 +260,34 @@ def main(argv=None) -> int:
         from .web import serve
         serve(args.host, args.port)
         return 0
+
+    if args.cmd == "fetch":
+        import os
+
+        from .data import write_ohlcv_csv
+        # Default to Stooq — the free, no-key source with long daily history —
+        # unless the user explicitly picked another live source.
+        if getattr(args, "alpha_vantage", False):
+            prov = AlphaVantageProvider(api_key=getattr(args, "api_key", None),
+                                        premium=getattr(args, "premium", False))
+        else:
+            prov = StooqProvider()
+        os.makedirs(args.out, exist_ok=True)
+        written = []
+        for sym in [s.strip() for s in args.symbols.split(",") if s.strip()]:
+            try:
+                series = prov.get_ohlcv(sym, args.timeframe, args.lookback)
+                path = os.path.join(args.out, f"{sym.upper()}_{args.timeframe}.csv")
+                n = write_ohlcv_csv(series, path)
+                written.append({"symbol": sym.upper(), "bars": n,
+                                "start": series.ts[0].date().isoformat(),
+                                "end": series.ts[-1].date().isoformat(), "path": path})
+            except Exception as e:  # noqa: BLE001 - surface per-symbol errors honestly
+                written.append({"symbol": sym.upper(), "error": str(e)})
+        out = {"source": getattr(prov, "source", "?"), "dir": args.out, "written": written,
+               "hint": f"now run: python -m atlas.cli forecast <SYM> --compare --csv {args.out}"}
+        print(json.dumps(out, indent=2, default=str))
+        return 0 if any("bars" in w for w in written) else 1
 
     reg = _registry(args)
 

@@ -163,6 +163,31 @@ def parse_ohlcv_csv(text: str, symbol: str, timeframe: str):
     return OHLCV.from_bars(symbol, timeframe, bars), skipped
 
 
+def write_ohlcv_csv(series: OHLCV, path: str) -> int:
+    """Write an OHLCV series to ``path`` in the native ``ts,open,...`` layout.
+
+    The layout round-trips through :func:`parse_ohlcv_csv`/:class:`CSVProvider`,
+    so a fetched-and-cached file loads back without editing. Dates are written as
+    ``YYYY-MM-DD`` for daily/weekly/monthly and full ISO for intraday. Returns the
+    number of bars written.
+    """
+    import os
+
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    intraday = series.timeframe in ("1m", "5m", "15m", "30m", "1h", "4h")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["ts", "open", "high", "low", "close", "volume"])
+        for i in range(len(series)):
+            ts = series.ts[i]
+            stamp = ts.isoformat() if intraday else ts.date().isoformat()
+            writer.writerow([stamp, series.open[i], series.high[i], series.low[i],
+                             series.close[i], series.volume[i]])
+    return len(series)
+
+
 class CSVProvider(DataProvider):
     """Loads OHLCV from CSV files in a directory, auto-detecting the layout.
 

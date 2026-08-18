@@ -243,6 +243,12 @@ python -m atlas.cli analyze AAPL --alpha-vantage --api-key YOURKEY   # or pass i
 python -m atlas.cli analyze AAPL --csv ./mydata
 python -m atlas.cli backtest AAPL --csv ./mydata --lookback 600   # long history = real backtests
 
+# 2b. Fetch full history once into a CSV cache, then work offline against it.
+#     Stooq (free, no key, long daily history) is the default source.
+python -m atlas.cli fetch AAPL,MSFT,NVDA --out ./mydata
+python -m atlas.cli forecast AAPL --compare --csv ./mydata   # many-fold skill, not noise
+python -m atlas.cli daily run --csv ./mydata --store ./predictions.json --report-format html > report.html
+
 # 3. Synthetic (default) — deterministic, seeded, always flagged simulated
 python -m atlas.cli analyze AAPL
 ```
