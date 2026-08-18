@@ -108,6 +108,51 @@ def test_forecast_flat_history_rejected():
     assert "error" in fc  # zero volatility => no distribution
 
 
+def test_forecast_refuses_under_60_bars():
+    fc = forecast_price(_synthetic_closes(50), horizon_days=30)
+    assert "error" in fc and "60" in fc["error"]
+    assert "error" not in forecast_price(_synthetic_closes(80), horizon_days=30, with_skill=False)
+
+
+def test_forecast_mean_exceeds_median():
+    # Lognormal: the mean sits above the median. They must be reported distinctly.
+    fc = forecast_price(_synthetic_closes(300), horizon_days=30, with_skill=False)
+    assert fc["mean"] > fc["median"]
+    assert fc["mean_return"] > fc["expected_return"]
+
+
+def test_forecast_drift_is_shrunk_and_capped():
+    fc = forecast_price(_synthetic_closes(300), horizon_days=30, with_skill=False)
+    inp = fc["inputs"]
+    # Shrinkage pulls the used drift toward zero relative to the raw sample mean.
+    assert abs(inp["daily_drift_log"]) <= abs(inp["daily_drift_raw_log"]) + 1e-12
+    assert 0.0 <= inp["drift_shrink_factor"] <= 1.0
+    assert inp["vol_estimator"].startswith("EWMA")
+
+
+def test_forecast_naive_has_symmetric_pup():
+    fc = forecast_price(_synthetic_closes(300), horizon_days=30, method="naive", with_skill=False)
+    assert abs(fc["p_up"] - 0.5) < 1e-9
+    assert fc["median"] == pytest.approx(fc["last_close"])
+
+
+def test_compare_methods_scores_all():
+    from atlas.forecast import compare_methods
+    cmp = compare_methods(_synthetic_closes(400), horizon_days=30)
+    assert {r["method"] for r in cmp["methods"]} == {"naive", "drift", "blend"}
+    assert cmp["best_method"] in ("naive", "drift", "blend")
+
+
+def test_registry_compare_and_query(tmp_path):
+    reg = ToolRegistry()
+    cmp = reg.compare_forecast_methods("AAA", horizon_days=30)
+    assert "best_method" in cmp
+    store = PredictionStore(str(tmp_path / "s.json"))
+    run_daily_report(reg, universe="nasdaq5", store=store)
+    q = reg.query_predictions(store_path=str(tmp_path / "s.json"), resolved=False)
+    assert q["count"] == 5 and all(not r["resolved"] for r in q["predictions"])
+
+
 # --------------------------------------------------------------------------- #
 # universe
 # --------------------------------------------------------------------------- #
@@ -184,16 +229,31 @@ def test_store_resolve_and_accuracy(tmp_path):
     store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
                          last_close=100.0, median=105.0, interval_80=[95, 115],
                          interval_95=[90, 120], p_up=0.6, method="drift")
-    series = [("2026-01-25", 101.0), ("2026-02-01", 108.0), ("2026-02-10", 110.0)]
+    # Target is 2026-01-31; realised = last bar AT OR BEFORE it (2026-01-30 = 108),
+    # an as-of join per §22, and only because the series extends past the target.
+    series = [("2026-01-20", 100.0), ("2026-01-30", 108.0), ("2026-02-10", 110.0)]
     res = store.resolve(lambda s: series, asof="2026-02-15")
     assert res["resolved_now"] == 1 and res["open_remaining"] == 0
+    rec = store.resolved()[0]
+    assert rec["realized_close"] == 108.0 and rec["realized_date"] == "2026-01-30"
     acc = store.accuracy_stats()
     assert acc["resolved_count"] == 1
     assert acc["sufficient"] is False  # < 10
-    # realized close is the first bar >= target (2026-02-01 = 108).
     assert acc["mape_model_pct"] == pytest.approx(abs(105 - 108) / 108 * 100)
     assert acc["model_beats_naive"] is True
     assert acc["directional_accuracy"] == 1.0
+
+
+def test_store_resolve_uses_last_bar_before_target(tmp_path):
+    store = PredictionStore(str(tmp_path / "s.json"))
+    store.log_prediction(run_id="r1", symbol="AAA", asof="2026-01-01", horizon_days=30,
+                         last_close=100.0, median=105.0, interval_80=[95, 115],
+                         interval_95=[90, 120], p_up=0.6, method="drift")
+    # Target 2026-01-31 falls on a gap; the bar AFTER it (Feb 2) must NOT be used.
+    series = [("2026-01-28", 102.0), ("2026-02-02", 130.0)]
+    store.resolve(lambda s: series, asof="2026-03-01")
+    rec = store.resolved()[0]
+    assert rec["realized_close"] == 102.0  # last bar <= target, not the Feb-2 spike
 
 
 def test_store_does_not_resolve_before_target(tmp_path):

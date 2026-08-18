@@ -185,16 +185,37 @@ class PredictionStore:
                        horizon_days: Optional[int] = None) -> Dict[str, object]:
         return accuracy_stats(self.resolved(symbol, horizon_days))
 
+    def query(self, run_id: Optional[str] = None, symbol: Optional[str] = None,
+              resolved: Optional[bool] = None) -> List[dict]:
+        """Return stored prediction records (each joined to its outcome) by filter."""
+        out = list(self.records)
+        if run_id:
+            out = [r for r in out if r.get("run_id") == run_id]
+        if symbol:
+            out = [r for r in out if r["symbol"] == symbol.upper()]
+        if resolved is not None:
+            out = [r for r in out if bool(r.get("resolved")) == resolved]
+        return out
+
 
 def _realized_at(series: List[tuple], tgt: date) -> Optional[tuple]:
-    """First ``(date, close)`` on or after ``tgt``; None if data hasn't reached it."""
-    best = None
-    for d, c in series:
-        dd = _to_date(d)
-        if dd >= tgt:
-            if best is None or dd < best[0]:
-                best = (dd, c)
-    return best
+    """Realised ``(date, close)`` for a target date, or None if not yet resolvable.
+
+    Per §22: the realised price is the close of the **last bar at or before the
+    target date** — an as-of join, never a later bar. It resolves only once the
+    data has actually reached the target (the series extends to or past it); if
+    the newest bar predates the target, today's price is not allowed to stand in.
+    """
+    dated = [(_to_date(d), c) for d, c in series]
+    if not dated:
+        return None
+    max_date = max(d for d, _ in dated)
+    if max_date < tgt:
+        return None  # horizon has not elapsed in the data yet
+    on_or_before = [(d, c) for d, c in dated if d <= tgt]
+    if not on_or_before:
+        return None  # target precedes the series (shouldn't happen)
+    return max(on_or_before, key=lambda dc: dc[0])
 
 
 def _score_outcome(rec: dict, realized_close: float) -> dict:

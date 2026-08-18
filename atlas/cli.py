@@ -214,8 +214,9 @@ def main(argv=None) -> int:
                           "show realised accuracy, or replay a stored run")
     pdr.add_argument("--universe", default="nasdaq10", help="universe key (default nasdaq10)")
     pdr.add_argument("--horizon", type=int, default=30, help="forecast horizon in calendar days")
-    pdr.add_argument("--method", default="drift", choices=["drift", "zero_drift"],
-                     help="forecast method (drift default; zero_drift = random-walk baseline)")
+    pdr.add_argument("--method", default="drift", choices=["drift", "blend", "naive"],
+                     help="forecast method (drift default; naive = random-walk baseline; "
+                          "blend = drift + capped momentum)")
     pdr.add_argument("--lookback", type=int, default=400, help="bars of history to fetch")
     pdr.add_argument("--refresh", action="store_true",
                      help="live-rerank the universe by market cap (needs a fundamentals feed)")
@@ -227,6 +228,23 @@ def main(argv=None) -> int:
     pdr.add_argument("--run-id", default=None, help="replay: which stored run to reconstruct")
     pdr.add_argument("--report-format", default="text", choices=["text", "markdown", "html", "json"],
                      help="rendered artefact format (default text)")
+
+    pfc = sub.add_parser("forecast", parents=[common],
+                         help="horizon price distribution for one symbol (§21)")
+    pfc.add_argument("symbol")
+    pfc.add_argument("--horizon", type=int, default=30, help="horizon in calendar days")
+    pfc.add_argument("--method", default="drift", choices=["drift", "blend", "naive"])
+    pfc.add_argument("--lookback", type=int, default=400)
+    pfc.add_argument("--compare", action="store_true",
+                     help="score every method over identical walk-forward origins")
+
+    pqp = sub.add_parser("predictions", parents=[common],
+                         help="read the prediction store (§22)")
+    pqp.add_argument("--store", default="atlas_predictions.json")
+    pqp.add_argument("--run-id", default=None)
+    pqp.add_argument("--symbol", default=None)
+    pqp.add_argument("--resolved", choices=["true", "false"], default=None,
+                     help="filter to resolved / open predictions only")
 
     args = p.parse_args(argv)
 
@@ -445,6 +463,17 @@ def main(argv=None) -> int:
             else:
                 print(render_report(report, fmt=args.report_format))
                 return 0
+    elif args.cmd == "forecast":
+        if args.compare:
+            out = reg.compare_forecast_methods(args.symbol, horizon_days=args.horizon,
+                                               lookback=args.lookback)
+        else:
+            out = reg.forecast_price(args.symbol, horizon_days=args.horizon,
+                                     method=args.method, lookback=args.lookback)
+    elif args.cmd == "predictions":
+        resolved = {"true": True, "false": False}.get(args.resolved)
+        out = reg.query_predictions(store_path=args.store, run_id=args.run_id,
+                                    symbol=args.symbol, resolved=resolved)
     else:  # pragma: no cover
         p.error("unknown command")
         return 2
