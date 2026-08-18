@@ -202,7 +202,24 @@ python -m atlas.cli daily run --universe nasdaq5 --horizon 30 --method drift
 python -m atlas.cli daily resolve  --store ./predictions.json
 python -m atlas.cli daily accuracy --store ./predictions.json
 python -m atlas.cli daily replay   --store ./predictions.json --report-format markdown
+
+# One-symbol horizon distribution; --compare scores every method out-of-sample
+python -m atlas.cli forecast AAPL --horizon 30 --method drift
+python -m atlas.cli forecast AAPL --compare
+python -m atlas.cli predictions --store ./predictions.json --resolved false
 ```
+
+The forecast model (§21) estimates **volatility by EWMA** (so it tracks the current
+regime) and **drift as the mean log return shrunk toward zero** by its own
+signal-to-noise ratio, then **hard-capped at one horizon standard deviation** — a
+sample mean of daily returns is mostly noise, and a trend is never allowed to
+dominate the projection. The distribution is lognormal: the **median** is the
+headline, the (higher) **mean** is reported separately, and P(up) is the
+calibratable prediction. Methods: `drift` (default), `naive` (random walk), `blend`
+(drift + capped momentum); `--compare` scores all three over identical
+walk-forward origins so the choice is evidence-based. Realised prices resolve as
+an **as-of join** — the last bar at or before the target date, only once the data
+has actually reached it.
 
 Every forecast is a distribution, never a target: each row carries a median, an
 80%/95% interval, P(up), and the model's **measured walk-forward skill vs. a random

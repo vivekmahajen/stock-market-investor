@@ -318,6 +318,23 @@ class ToolRegistry:
         out["simulated"] = f["provenance"].get("simulated", False)
         return out
 
+    def compare_forecast_methods(self, symbol: str, horizon_days: int = 30,
+                                 timeframe: str = "1d", lookback: int = 400) -> dict:
+        from .forecast import compare_methods
+        f = self.get_ohlcv(symbol, timeframe, lookback)
+        if "error" in f:
+            return {"symbol": symbol, "error": f["error"]}
+        out = compare_methods(list(f["_series"].close), horizon_days=horizon_days)
+        out["symbol"] = symbol
+        out["simulated"] = f["provenance"].get("simulated", False)
+        return out
+
+    def query_predictions(self, store_path: Optional[str] = None, run_id: Optional[str] = None,
+                          symbol: Optional[str] = None, resolved: Optional[bool] = None) -> dict:
+        store = self._pred_store(store_path)
+        recs = store.query(run_id=run_id, symbol=symbol, resolved=resolved)
+        return {"count": len(recs), "predictions": recs}
+
     def run_daily_report(self, universe: str = "nasdaq10", horizon_days: int = 30,
                          method: str = "drift", store_path: Optional[str] = None,
                          refresh: bool = False, asof: Optional[str] = None,
