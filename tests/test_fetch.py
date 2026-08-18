@@ -28,16 +28,16 @@ def test_write_ohlcv_csv_native_header(tmp_path):
 
 
 def test_fetch_cli_writes_cache_then_csv_reads_it(tmp_path, monkeypatch, capsys):
-    # Stub the live Stooq source with the deterministic synthetic feed.
-    class FakeStooq(SyntheticProvider):
-        source = "stooq"
+    # Stub the default live source (Yahoo) with the deterministic synthetic feed.
+    class FakeYahoo(SyntheticProvider):
+        source = "yahoo"
 
-    monkeypatch.setattr(cli, "StooqProvider", FakeStooq)
+    monkeypatch.setattr(cli, "YahooProvider", FakeYahoo)
     out_dir = str(tmp_path / "cache")
     rc = cli.main(["fetch", "AAPL,MSFT", "--out", out_dir, "--lookback", "400"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["source"] == "stooq"
+    assert payload["source"] == "yahoo"
     assert {w["symbol"] for w in payload["written"]} == {"AAPL", "MSFT"}
     assert all(w["bars"] == 400 for w in payload["written"])
     assert os.path.exists(os.path.join(out_dir, "AAPL_1d.csv"))
@@ -51,15 +51,15 @@ def test_fetch_cli_writes_cache_then_csv_reads_it(tmp_path, monkeypatch, capsys)
 
 
 def test_fetch_cli_reports_per_symbol_errors(tmp_path, monkeypatch, capsys):
-    class BrokenStooq(SyntheticProvider):
-        source = "stooq"
+    class BrokenYahoo(SyntheticProvider):
+        source = "yahoo"
 
         def get_ohlcv(self, symbol, timeframe, lookback):
             if symbol.upper() == "BAD":
                 raise RuntimeError("no data for BAD")
             return super().get_ohlcv(symbol, timeframe, lookback)
 
-    monkeypatch.setattr(cli, "StooqProvider", BrokenStooq)
+    monkeypatch.setattr(cli, "YahooProvider", BrokenYahoo)
     rc = cli.main(["fetch", "AAPL,BAD", "--out", str(tmp_path / "c"), "--lookback", "200"])
     assert rc == 0  # partial success still writes what it can
     written = {w["symbol"]: w for w in json.loads(capsys.readouterr().out)["written"]}
