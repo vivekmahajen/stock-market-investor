@@ -131,6 +131,7 @@ class YahooProvider:
         # canonical price. This is the single most important correctness choice
         # for the forecaster: without it, split days masquerade as ±90% returns.
         adjclose = ((indicators.get("adjclose") or [{}])[0].get("adjclose")) or []
+        have_adj = any(x is not None for x in adjclose)
         if not stamps or not closes:
             raise RuntimeError(f"Yahoo payload for '{symbol}' had no price series.")
 
@@ -143,7 +144,15 @@ class YahooProvider:
                 if None in (o, h, l, c):
                     skipped += 1  # holiday/halt row Yahoo pads with nulls
                     continue
-                a = adjclose[i] if i < len(adjclose) and adjclose[i] is not None else c
+                # Use the adjusted series when available. If adjclose exists for
+                # the symbol but is null on THIS bar, skip the bar rather than
+                # fall back to the raw close — mixing adjusted and unadjusted
+                # prices in one series would manufacture split-sized fake returns.
+                ai = adjclose[i] if i < len(adjclose) else None
+                if have_adj and ai is None:
+                    skipped += 1
+                    continue
+                a = ai if ai is not None else c
                 factor = (a / c) if c else 1.0  # split/dividend back-adjust factor
                 dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                 if not intraday:

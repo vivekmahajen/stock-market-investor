@@ -78,6 +78,24 @@ def test_uses_adjusted_close_to_remove_split_jump():
     assert s.open[0] == 100.0  # open back-adjusted by adjclose/close = 100/200
 
 
+def test_null_adjclose_bar_is_skipped_not_scale_mixed():
+    # adjclose present for the series but null on one bar => that bar is skipped,
+    # never filled from the raw (unadjusted) close, which would mix price scales.
+    payload = json.dumps({"chart": {"error": None, "result": [{
+        "meta": {},
+        "timestamp": [1577836800, 1577923200, 1578009600],
+        "indicators": {
+            "quote": [{"open": [200, 202, 204], "high": [201, 203, 205],
+                       "low": [199, 201, 203], "close": [200, 202, 204], "volume": [1, 2, 3]}],
+            "adjclose": [{"adjclose": [100, None, 102]}],  # middle bar unadjusted
+        },
+    }]}})
+    p, _ = _provider(payload)
+    s = p.get_ohlcv("AAPL", "1d", 0)
+    assert list(s.close) == [100.0, 102.0]  # the raw-202 bar dropped, not mixed in
+    assert p.last_skipped_rows == 1
+
+
 def test_error_envelope_raises():
     p, _ = _provider(_chart(None, None, None, None, None, None,
                             error={"code": "Not Found", "description": "No data found"}))
